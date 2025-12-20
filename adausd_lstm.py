@@ -38,9 +38,9 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"⚠️ Error Telegram: {e}")
 
-def download_ethusd(interval='1h', path='ETHUSD_1h_data.csv'):
+def download_adausd(interval='1h', path='ADAUSD_1h_data.csv'):
     print("="*70)
-    print(f"  DESCARGA ETHUSD - {interval.upper()}")
+    print(f"  DESCARGA ADAUSD - {interval.upper()}")
     print("="*70 + "\n")
 
     if os.path.exists(path):
@@ -62,7 +62,7 @@ def download_ethusd(interval='1h', path='ETHUSD_1h_data.csv'):
             return df_exist
         print(f"🔄 Actualizando (hace {diff_h:.1f}h)...\n")
     
-    ticker = yf.Ticker("ETH-USD")
+    ticker = yf.Ticker("ADA-USD")
     df_new = ticker.history(period="2y", interval=interval)
     df_new = df_new.reset_index()
     df_new.columns = [str(c).lower() for c in df_new.columns]
@@ -269,7 +269,7 @@ def plot_results(train_l, val_l, lrs, pred_d, act_d, metrics, path):
         return s
 
     fig = plt.figure(figsize=(24, 16))
-    fig.suptitle('ETHUSD Multi-Output LSTM - Resultados Completos', 
+    fig.suptitle('ADAUSD Multi-Output LSTM - Resultados Completos', 
                  fontsize=18, fontweight='bold', y=0.995)
 
     labels = ['High', 'Low', 'Close']
@@ -407,7 +407,7 @@ if __name__ == "__main__":
         print(f"🖥️ Device: {device}\n")
 
         # 1. Descargar
-        df = download_ethusd(interval=INTERVAL, path='ETHUSD_1h_data.csv')
+        df = download_adausd(interval=INTERVAL, path='ADAUSD_1h_data.csv')
 
         # 2. Preparar
         X, y, scaler_in, scaler_out = prepare_data(df, SEQ_LEN)
@@ -438,17 +438,17 @@ if __name__ == "__main__":
         preds, acts, metrics, pred_d, act_d = evaluate(model, test_loader, scaler_out, device)
 
         # 8. Graficar CON MÉTRICAS
-        plot_results(train_l, val_l, lrs, pred_d, act_d, metrics, 'ethusd_results.png')
+        plot_results(train_l, val_l, lrs, pred_d, act_d, metrics, 'adausd_results.png')
 
         # 9. Guardar
-        model_dir = 'ETHUSD_MODELS'
+        model_dir = 'ADAUSD_MODELS'
         os.makedirs(model_dir, exist_ok=True)
 
         torch.save({
             'model_state_dict': model.state_dict(),
             'metrics': metrics,
             'config': {'seq_len': SEQ_LEN, 'hidden': HIDDEN, 'layers': LAYERS}
-        }, f'{model_dir}/ethusd_lstm_{INTERVAL}.pth')
+        }, f'{model_dir}/adausd_lstm_{INTERVAL}.pth')
 
         joblib.dump(scaler_in, f'{model_dir}/scaler_input_{INTERVAL}.pkl')
         joblib.dump(scaler_out, f'{model_dir}/scaler_output_{INTERVAL}.pkl')
