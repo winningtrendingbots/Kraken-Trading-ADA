@@ -51,7 +51,7 @@ jobs:
           fi
           
           # Verificar archivos críticos
-          if [ ! -d "ETHUSD_MODELS" ] || [ ! -f "ETHUSD_MODELS/ethusd_lstm_1h.pth" ]; then
+          if [ ! -d "ADAUSD_MODELS" ] || [ ! -f "ADAUSD_MODELS/adausd_lstm_1h.pth" ]; then
             echo "❌ Modelo LSTM faltante o corrupto"
             needs_recovery="true"
             recovery_action="restore_model"
@@ -122,8 +122,8 @@ jobs:
           
           missing=""
           
-          [ ! -f "ETHUSD_1h_data.csv" ] && missing="${missing}ETHUSD_1h_data.csv "
-          [ ! -d "ETHUSD_MODELS" ] && missing="${missing}ETHUSD_MODELS/ "
+          [ ! -f "ADAUSD_1h_data.csv" ] && missing="${missing}ADAUSD_1h_data.csv "
+          [ ! -d "ADAUSD_MODELS" ] && missing="${missing}ADAUSD_MODELS/ "
           
           if [ -n "$missing" ]; then
             echo "⚠️ Archivos faltantes: $missing"
@@ -160,7 +160,7 @@ jobs:
           for commit in $(git log --oneline -10 --pretty=format:"%H"); do
             git checkout $commit 2>/dev/null
             
-            if [ -f "ETHUSD_MODELS/ethusd_lstm_1h.pth" ] && [ -f "ETHUSD_MODELS/config_1h.json" ]; then
+            if [ -f "ADAUSD_MODELS/adausd_lstm_1h.pth" ] && [ -f "ADAUSD_MODELS/config_1h.json" ]; then
               echo "✅ Modelo encontrado en commit: $commit"
               echo "model_commit=$commit" >> $GITHUB_OUTPUT
               git checkout main
@@ -177,12 +177,12 @@ jobs:
         run: |
           echo "📦 Restaurando modelo desde commit ${{ steps.find_model.outputs.model_commit }}..."
           
-          git checkout ${{ steps.find_model.outputs.model_commit }} -- ETHUSD_MODELS/
+          git checkout ${{ steps.find_model.outputs.model_commit }} -- ADAUSD_MODELS/
           
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          git add ETHUSD_MODELS/
+          git add ADAUSD_MODELS/
           git commit -m "🔧 Restored model from ${{ steps.find_model.outputs.model_commit }}" || true
           git push origin main
           
@@ -252,7 +252,7 @@ jobs:
           
           [ -f "kraken_trades.csv" ] && cp kraken_trades.csv backup/ || true
           [ -f "trading_signals.csv" ] && cp trading_signals.csv backup/ || true
-          [ -d "ETHUSD_MODELS" ] && cp -r ETHUSD_MODELS backup/ || true
+          [ -d "ADAUSD_MODELS" ] && cp -r ADAUSD_MODELS backup/ || true
           
           echo "📦 Backup creado en directorio temporal"
       
@@ -272,10 +272,10 @@ jobs:
           rm -f kraken_trades.csv trading_signals.csv orders_executed.csv open_orders.json
           
           # Eliminar modelos
-          rm -rf ETHUSD_MODELS/
+          rm -rf ADAUSD_MODELS/
           
           # Eliminar gráficas
-          rm -f ethusd_results.png trading_analytics.png
+          rm -f adausd_results.png trading_analytics.png
           
           # Crear CSVs vacíos con headers
           echo "timestamp,txid,side,entry_price,close_price,volume,tp,sl,close_reason,time_open_min,pnl_usd,pnl_%" > kraken_trades.csv
