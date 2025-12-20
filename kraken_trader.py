@@ -50,10 +50,10 @@ def kraken_request(uri_path, data):
     return req.json()
 
 def get_current_price():
-    url = f"{KRAKEN_API_URL}/0/public/Ticker?pair=ETHUSD"
+    url = f"{KRAKEN_API_URL}/0/public/Ticker?pair=ADAUSD"
     r = requests.get(url).json()
-    if 'result' in r and 'XETHZUSD' in r['result']:
-        return float(r['result']['XETHZUSD']['c'][0])
+    if 'result' in r and 'XADAZUSD' in r['result']:
+        return float(r['result']['XADAZUSD']['c'][0])
     return None
 
 def get_balance():
@@ -64,7 +64,7 @@ def get_balance():
 def place_order(side, volume, price, tp_price, sl_price):
     """
     side: 'buy' o 'sell'
-    volume: cantidad en ETH
+    volume: cantidad en ADA
     price: precio límite (None para market order)
     tp_price: take profit
     sl_price: stop loss
@@ -74,7 +74,7 @@ def place_order(side, volume, price, tp_price, sl_price):
         'ordertype': 'limit' if price else 'market',
         'type': side,
         'volume': str(volume),
-        'pair': 'XETHZUSD',
+        'pair': 'XADAZUSD',
     }
     
     if price:
@@ -356,7 +356,7 @@ def execute_signal():
     print(f"{'='*70}")
     print(f"📊 Señal: {signal}")
     print(f"💰 Precio: ${current_price:.2f}")
-    print(f"📈 Volumen: {volume} ETH (${position['position_value']:.2f})")
+    print(f"📈 Volumen: {volume} ADA (${position['position_value']:.2f})")
     print(f"   • Riesgo: ${position['risk_amount']:.2f} ({risk_manager.risk_per_trade*100}%)")
     print(f"   • Capital usado: {position['capital_used_%']:.1f}%")
     print(f"   • Mult. confianza: {position['confidence_multiplier']:.2f}x")
@@ -431,7 +431,7 @@ def execute_signal():
 
 📊 Tipo: {signal}
 💰 Entrada: ${current_price:.2f}
-📈 Volumen: {volume} ETH (${position['position_value']:.2f})
+📈 Volumen: {volume} ADA (${position['position_value']:.2f})
    • Riesgo: ${position['risk_amount']:.2f}
    • Capital: {position['capital_used_%']:.1f}%
 
