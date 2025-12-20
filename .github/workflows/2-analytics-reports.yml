@@ -267,12 +267,12 @@ except Exception as e:
           issues=""
           
           # Verificar archivos críticos
-          [ ! -d "ETHUSD_MODELS" ] && issues="${issues}❌ Falta ETHUSD_MODELS/\n"
-          [ ! -f "ETHUSD_1h_data.csv" ] && issues="${issues}❌ Falta ETHUSD_1h_data.csv\n"
+          [ ! -d "ADAUSD_MODELS" ] && issues="${issues}❌ Falta ADAUSD_MODELS/\n"
+          [ ! -f "ADAUSD_1h_data.csv" ] && issues="${issues}❌ Falta ADAUSD_1h_data.csv\n"
           
           # Verificar última actualización del modelo
-          if [ -f "ETHUSD_MODELS/config_1h.json" ]; then
-            last_update=$(stat -c %Y "ETHUSD_MODELS/config_1h.json")
+          if [ -f "ADAUSD_MODELS/config_1h.json" ]; then
+            last_update=$(stat -c %Y "ADAUSD_MODELS/config_1h.json")
             now=$(date +%s)
             hours_old=$(( ($now - $last_update) / 3600 ))
             
