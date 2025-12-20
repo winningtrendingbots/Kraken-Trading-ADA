@@ -3,7 +3,7 @@ PREDICCIÓN + FILTROS TÉCNICOS
 
 Este script:
 1. Carga el modelo LSTM entrenado
-2. Descarga datos recientes de ETHUSD (1h)
+2. Descarga datos recientes de adaUSD (1h)
 3. Genera predicción (High, Low, Close)
 4. Aplica filtros técnicos (RSI, ATR, Tendencia)
 5. Genera señal: BUY, SELL o HOLD
@@ -35,7 +35,7 @@ def send_telegram(msg):
     except Exception as e:
         print(f"❌ Telegram: {e}")
 
-# Clase del modelo (debe coincidir con ethusd_lstm.py)
+# Clase del modelo (debe coincidir con adausd_lstm.py)
 class MultiOutputLSTM(nn.Module):
     def __init__(self, input_size=4, hidden_size=256, num_layers=3,
                  output_size=3, dropout=0.3):
@@ -186,11 +186,11 @@ def main():
     print("="*70 + "\n")
     
     # 1. CARGAR MODELO
-    model_dir = 'ETHUSD_MODELS'
+    model_dir = 'ADAUSD_MODELS'
     interval = '1h'
     
     if not os.path.exists(model_dir):
-        error_msg = "❌ No existe ETHUSD_MODELS/. Ejecuta primero el entrenamiento."
+        error_msg = "❌ No existe ADAUSD_MODELS/. Ejecuta primero el entrenamiento."
         print(error_msg)
         send_telegram(error_msg)
         return
@@ -211,7 +211,7 @@ def main():
         # Cargar modelo
         # DESPUÉS (arreglado)
         checkpoint = torch.load(
-            f'{model_dir}/ethusd_lstm_{interval}.pth', 
+            f'{model_dir}/adausd_lstm_{interval}.pth', 
             map_location=torch.device('cpu'),
             weights_only=False  # Necesario para PyTorch >= 2.6
         )
@@ -232,7 +232,7 @@ def main():
     print("📥 Descargando datos recientes...")
     
     try:
-        ticker = yf.Ticker("ETH-USD")
+        ticker = yf.Ticker("ADA-USD")
         df = ticker.history(period="5d", interval=interval)
         df = df.reset_index()
         df.columns = [str(c).lower() for c in df.columns]
