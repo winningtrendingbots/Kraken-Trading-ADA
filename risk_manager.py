@@ -87,7 +87,7 @@ class RiskManager:
         
         Args:
             entry_price: Precio de entrada
-            volume: Volumen en ETH
+            volume: Volumen en ADA
             leverage: Apalancamiento (1x, 2x, 3x, etc)
         
         Returns:
@@ -252,7 +252,7 @@ class RiskManager:
         
         # 11. Validaciones finales
         if volume < 0.001:
-            result['reason'] = "Volumen menor al mínimo (0.001 ETH)"
+            result['reason'] = "Volumen menor al mínimo (0.001 ADA)"
             return result
         
         if margin_calc['margin_required'] > margin_calc['margin_available']:
@@ -440,7 +440,7 @@ if __name__ == "__main__":
         position = rm.calculate_position_size(entry, sl, confidence, 'buy', use_leverage=True)
         
         print(f"\n💼 Posición CON Margen:")
-        print(f"  Volumen: {position['volume']} ETH")
+        print(f"  Volumen: {position['volume']} ADA")
         print(f"  Valor Posición: ${position['position_value']:.2f}")
         print(f"  Leverage: {position['leverage']}x")
         print(f"  Margen Requerido: ${position['margin_required']:.2f}")
@@ -454,5 +454,5 @@ if __name__ == "__main__":
         # Sin margen para comparar
         position_no_lev = rm.calculate_position_size(entry, sl, confidence, 'buy', use_leverage=False)
         print(f"\n💼 Posición SIN Margen (comparación):")
-        print(f"  Volumen: {position_no_lev['volume']} ETH")
+        print(f"  Volumen: {position_no_lev['volume']} ADA")
         print(f"  Valor: ${position_no_lev['position_value']:.2f}")
