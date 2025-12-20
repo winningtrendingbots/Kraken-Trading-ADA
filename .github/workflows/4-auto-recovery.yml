@@ -1,0 +1,331 @@
+name: 🔧 Auto Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      recovery_type:
+        description: 'Tipo de recuperación'
+        required: true
+        type: choice
+        options:
+          - fix_conflicts
+          - restore_model
+          - clean_state
+          - full_reset
+  
+  # Se ejecuta automáticamente si otros workflows fallan
+  workflow_run:
+    workflows: ["🤖 Trading Bot Unificado"]
+    types: [completed]
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  check-failure:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'failure' || github.event_name == 'workflow_dispatch'
+    outputs:
+      needs_recovery: ${{ steps.analyze.outputs.needs_recovery }}
+      recovery_action: ${{ steps.analyze.outputs.recovery_action }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+      
+      - name: Analyze failure
+        id: analyze
+        run: |
+          echo "🔍 Analizando estado del repositorio..."
+          
+          needs_recovery="false"
+          recovery_action="none"
+          
+          # Verificar conflictos de merge
+          if git ls-files -u | grep -q .; then
+            echo "❌ Conflictos de merge detectados"
+            needs_recovery="true"
+            recovery_action="fix_conflicts"
+          fi
+          
+          # Verificar archivos críticos
+          if [ ! -d "ETHUSD_MODELS" ] || [ ! -f "ETHUSD_MODELS/ethusd_lstm_1h.pth" ]; then
+            echo "❌ Modelo LSTM faltante o corrupto"
+            needs_recovery="true"
+            recovery_action="restore_model"
+          fi
+          
+          # Verificar estado del working directory
+          if ! git diff-index --quiet HEAD --; then
+            echo "⚠️ Working directory no limpio"
+            if [ "$recovery_action" == "none" ]; then
+              recovery_action="clean_state"
+            fi
+          fi
+          
+          echo "needs_recovery=$needs_recovery" >> $GITHUB_OUTPUT
+          echo "recovery_action=$recovery_action" >> $GITHUB_OUTPUT
+          
+          if [ "$needs_recovery" == "true" ]; then
+            echo "🔧 Recuperación necesaria: $recovery_action"
+          else
+            echo "✅ Sistema saludable"
+          fi
+      
+      - name: Notify issue detected
+        if: steps.analyze.outputs.needs_recovery == 'true'
+        env:
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="⚠️ *Sistema requiere recuperación*%0A%0ATipo: ${{ steps.analyze.outputs.recovery_action }}" \
+            -d parse_mode="Markdown"
+
+  fix-conflicts:
+    needs: check-failure
+    if: |
+      needs.check-failure.outputs.recovery_action == 'fix_conflicts' ||
+      github.event.inputs.recovery_type == 'fix_conflicts'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout with clean state
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      
+      - name: Reset to clean state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          echo "🔍 Estado actual:"
+          git status
+          
+          echo "📥 Obteniendo última versión remota..."
+          git fetch origin main
+          
+          echo "🧹 Limpiando working directory..."
+          git reset --hard origin/main
+          
+          echo "✅ Repositorio limpio!"
+          git log --oneline -3
+      
+      - name: Verify critical files
+        run: |
+          echo "📂 Verificando archivos críticos..."
+          
+          missing=""
+          
+          [ ! -f "ETHUSD_1h_data.csv" ] && missing="${missing}ETHUSD_1h_data.csv "
+          [ ! -d "ETHUSD_MODELS" ] && missing="${missing}ETHUSD_MODELS/ "
+          
+          if [ -n "$missing" ]; then
+            echo "⚠️ Archivos faltantes: $missing"
+            echo "Estos se regenerarán en el próximo entrenamiento"
+          else
+            echo "✅ Todos los archivos críticos presentes"
+          fi
+      
+      - name: Push clean state
+        run: |
+          git push origin main --force-with-lease || {
+            echo "⚠️ No fue necesario forzar push"
+          }
+          echo "✅ Estado limpio aplicado!"
+
+  restore-model:
+    needs: check-failure
+    if: |
+      needs.check-failure.outputs.recovery_action == 'restore_model' ||
+      github.event.inputs.recovery_type == 'restore_model'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+      
+      - name: Find last good model
+        id: find_model
+        run: |
+          echo "🔍 Buscando último commit con modelo válido..."
+          
+          for commit in $(git log --oneline -10 --pretty=format:"%H"); do
+            git checkout $commit 2>/dev/null
+            
+            if [ -f "ETHUSD_MODELS/ethusd_lstm_1h.pth" ] && [ -f "ETHUSD_MODELS/config_1h.json" ]; then
+              echo "✅ Modelo encontrado en commit: $commit"
+              echo "model_commit=$commit" >> $GITHUB_OUTPUT
+              git checkout main
+              exit 0
+            fi
+          done
+          
+          echo "❌ No se encontró modelo válido en últimos 10 commits"
+          git checkout main
+          exit 1
+      
+      - name: Restore model files
+        if: steps.find_model.outputs.model_commit != ''
+        run: |
+          echo "📦 Restaurando modelo desde commit ${{ steps.find_model.outputs.model_commit }}..."
+          
+          git checkout ${{ steps.find_model.outputs.model_commit }} -- ETHUSD_MODELS/
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add ETHUSD_MODELS/
+          git commit -m "🔧 Restored model from ${{ steps.find_model.outputs.model_commit }}" || true
+          git push origin main
+          
+          echo "✅ Modelo restaurado"
+      
+      - name: Trigger new training
+        if: steps.find_model.outputs.model_commit == ''
+        run: |
+          echo "⚠️ No hay modelo para restaurar"
+          echo "🔄 Se necesita ejecutar entrenamiento completo"
+          
+          # Disparar workflow de entrenamiento
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/1-trading-core.yml/dispatches" \
+            -d '{"ref":"main","inputs":{"task":"train"}}'
+
+  clean-state:
+    needs: check-failure
+    if: |
+      needs.check-failure.outputs.recovery_action == 'clean_state' ||
+      github.event.inputs.recovery_type == 'clean_state'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Clean working directory
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          echo "🧹 Limpiando archivos sin rastrear..."
+          git clean -fd
+          
+          echo "🔄 Descartando cambios locales..."
+          git reset --hard HEAD
+          
+          echo "✅ Working directory limpio"
+          git status
+
+  full-reset:
+    if: github.event.inputs.recovery_type == 'full_reset'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Confirm reset
+        run: |
+          echo "⚠️⚠️⚠️ RESET COMPLETO ⚠️⚠️⚠️"
+          echo "Esto eliminará:"
+          echo "  - Todos los CSVs de trading"
+          echo "  - Modelos entrenados"
+          echo "  - Órdenes abiertas"
+          echo ""
+          echo "Solo archivos del código fuente se mantendrán"
+      
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Backup current state
+        run: |
+          mkdir -p backup
+          
+          [ -f "kraken_trades.csv" ] && cp kraken_trades.csv backup/ || true
+          [ -f "trading_signals.csv" ] && cp trading_signals.csv backup/ || true
+          [ -d "ETHUSD_MODELS" ] && cp -r ETHUSD_MODELS backup/ || true
+          
+          echo "📦 Backup creado en directorio temporal"
+      
+      - name: Upload backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: pre-reset-backup-${{ github.run_number }}
+          path: backup/
+          retention-days: 30
+      
+      - name: Reset to clean slate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Eliminar CSVs de datos
+          rm -f kraken_trades.csv trading_signals.csv orders_executed.csv open_orders.json
+          
+          # Eliminar modelos
+          rm -rf ETHUSD_MODELS/
+          
+          # Eliminar gráficas
+          rm -f ethusd_results.png trading_analytics.png
+          
+          # Crear CSVs vacíos con headers
+          echo "timestamp,txid,side,entry_price,close_price,volume,tp,sl,close_reason,time_open_min,pnl_usd,pnl_%" > kraken_trades.csv
+          echo "timestamp,current_price,pred_high,pred_low,pred_close,pred_change_%,atr,volatility,trend,signal,confidence" > trading_signals.csv
+          echo "timestamp,txid,side,entry_price,volume,tp,sl,confidence,order_executed,order_type" > orders_executed.csv
+          echo "[]" > open_orders.json
+          
+          git add -A
+          git commit -m "🔄 Full reset - Clean slate [$(date +'%Y-%m-%d %H:%M UTC')]"
+          git push origin main
+          
+          echo "✅ Sistema reseteado completamente"
+      
+      - name: Trigger initial training
+        run: |
+          echo "🚀 Iniciando entrenamiento inicial..."
+          
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/1-trading-core.yml/dispatches" \
+            -d '{"ref":"main","inputs":{"task":"train"}}'
+
+  notify-recovery:
+    needs: [check-failure, fix-conflicts, restore-model, clean-state, full-reset]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send recovery status
+        env:
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          status="unknown"
+          
+          if [ "${{ needs.fix-conflicts.result }}" == "success" ]; then
+            status="✅ Conflictos resueltos"
+          elif [ "${{ needs.restore-model.result }}" == "success" ]; then
+            status="✅ Modelo restaurado"
+          elif [ "${{ needs.clean-state.result }}" == "success" ]; then
+            status="✅ Estado limpio"
+          elif [ "${{ needs.full-reset.result }}" == "success" ]; then
+            status="✅ Reset completo exitoso"
+          elif [ "${{ needs.check-failure.outputs.needs_recovery }}" == "false" ]; then
+            status="✅ Sistema saludable - No se requirió recuperación"
+          else
+            status="❌ Recuperación falló"
+          fi
+          
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="🔧 *Auto Recovery*%0A%0A${status}" \
+            -d parse_mode="Markdown"

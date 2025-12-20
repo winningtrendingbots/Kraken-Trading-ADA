@@ -1,0 +1,300 @@
+name: 📊 Analytics & Reports
+
+on:
+  schedule:
+    - cron: '0 23 * * *'      # Reporte diario a las 23:00 UTC
+    - cron: '0 12 * * 0'      # Reporte semanal domingos 12:00 UTC
+  workflow_dispatch:
+    inputs:
+      report_type:
+        description: 'Tipo de reporte'
+        required: true
+        type: choice
+        options:
+          - daily
+          - weekly
+          - full_analysis
+
+permissions:
+  contents: read
+
+concurrency:
+  group: analytics-reports
+  cancel-in-progress: false
+
+jobs:
+  generate-analytics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Check data files exist
+        run: |
+          echo "📂 Verificando archivos de datos..."
+          
+          if [ ! -f "kraken_trades.csv" ]; then
+            echo "⚠️ No existe kraken_trades.csv - creando vacío"
+            echo "timestamp,txid,side,entry_price,close_price,volume,tp,sl,close_reason,time_open_min,pnl_usd,pnl_%" > kraken_trades.csv
+          else
+            echo "✅ kraken_trades.csv encontrado ($(wc -l < kraken_trades.csv) líneas)"
+          fi
+          
+          if [ ! -f "trading_signals.csv" ]; then
+            echo "⚠️ No existe trading_signals.csv - creando vacío"
+            echo "timestamp,current_price,pred_high,pred_low,pred_close,pred_change_%,atr,volatility,trend,signal,confidence" > trading_signals.csv
+          else
+            echo "✅ trading_signals.csv encontrado ($(wc -l < trading_signals.csv) líneas)"
+          fi
+          
+          if [ ! -f "orders_executed.csv" ]; then
+            echo "⚠️ No existe orders_executed.csv - creando vacío"
+            echo "timestamp,txid,side,entry_price,volume,tp,sl,confidence,order_executed,order_type" > orders_executed.csv
+          else
+            echo "✅ orders_executed.csv encontrado ($(wc -l < orders_executed.csv) líneas)"
+          fi
+      
+      - name: Generate full analytics
+        env:
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          echo "📊 Generando análisis completo..."
+          python analytics.py || {
+            echo "❌ Error en analytics.py"
+            # Enviar notificación de error
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="❌ Error generando analytics" \
+              -d parse_mode="Markdown"
+            exit 1
+          }
+      
+      - name: Upload analytics chart
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trading-analytics-${{ github.run_number }}
+          path: trading_analytics.png
+          retention-days: 30
+      
+      - name: Generate daily summary
+        if: github.event.schedule == '0 23 * * *' || github.event.inputs.report_type == 'daily'
+        env:
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          echo "📅 Generando reporte diario..."
+          python -c "
+from datetime import datetime
+import pandas as pd
+import os
+import requests
+
+TELEGRAM_API = os.environ.get('TELEGRAM_API')
+CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
+
+def send_telegram(msg):
+    try:
+        url = f'https://api.telegram.org/bot{TELEGRAM_API}/sendMessage'
+        requests.post(url, data={'chat_id': CHAT_ID, 'text': msg, 'parse_mode': 'Markdown'}, timeout=10)
+    except Exception as e:
+        print(f'Error Telegram: {e}')
+
+try:
+    report = f'📊 *Reporte Diario - {datetime.now().strftime(\"%Y-%m-%d\")}*\n\n'
+    
+    # Trades
+    if os.path.exists('kraken_trades.csv'):
+        df = pd.read_csv('kraken_trades.csv')
+        if len(df) > 0:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            today = df[df['timestamp'].dt.date == datetime.now().date()]
+            
+            if len(today) > 0:
+                pnl = today['pnl_usd'].sum()
+                wins = (today['pnl_usd'] > 0).sum()
+                total = len(today)
+                wr = (wins / total * 100) if total > 0 else 0
+                
+                report += f'💼 *TRADING HOY:*\n'
+                report += f'Trades: {total}\n'
+                report += f'Ganadas: {wins} ({wr:.1f}%)\n'
+                report += f'P&L: ${pnl:.2f}\n\n'
+            else:
+                report += '⏸️ No hay trades hoy\n\n'
+            
+            # Stats totales
+            all_pnl = df['pnl_usd'].sum()
+            all_wins = (df['pnl_usd'] > 0).sum()
+            all_total = len(df)
+            all_wr = (all_wins / all_total * 100) if all_total > 0 else 0
+            
+            report += f'📈 *TOTALES:*\n'
+            report += f'Trades: {all_total}\n'
+            report += f'Win Rate: {all_wr:.1f}%\n'
+            report += f'P&L: ${all_pnl:.2f}\n'
+    
+    # Señales
+    if os.path.exists('trading_signals.csv'):
+        df = pd.read_csv('trading_signals.csv')
+        if len(df) > 0:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            today = df[df['timestamp'].dt.date == datetime.now().date()]
+            
+            if len(today) > 0:
+                buys = (today['signal'] == 'BUY').sum()
+                sells = (today['signal'] == 'SELL').sum()
+                holds = (today['signal'] == 'HOLD').sum()
+                
+                report += f'\n🎯 *SEÑALES HOY:*\n'
+                report += f'🟢 BUY: {buys}\n'
+                report += f'🔴 SELL: {sells}\n'
+                report += f'⚪ HOLD: {holds}\n'
+    
+    send_telegram(report)
+    print(report)
+    
+except Exception as e:
+    print(f'❌ Error: {e}')
+    send_telegram(f'❌ Error en reporte diario: {str(e)[:100]}')
+"
+      
+      - name: Generate weekly summary
+        if: github.event.schedule == '0 12 * * 0' || github.event.inputs.report_type == 'weekly'
+        env:
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          echo "📅 Generando reporte semanal..."
+          python -c "
+from datetime import datetime, timedelta
+import pandas as pd
+import os
+import requests
+
+TELEGRAM_API = os.environ.get('TELEGRAM_API')
+CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
+
+def send_telegram(msg):
+    try:
+        url = f'https://api.telegram.org/bot{TELEGRAM_API}/sendMessage'
+        requests.post(url, data={'chat_id': CHAT_ID, 'text': msg, 'parse_mode': 'Markdown'}, timeout=10)
+    except Exception as e:
+        print(f'Error Telegram: {e}')
+
+try:
+    report = f'📊 *Reporte Semanal*\n'
+    report += f'📅 {(datetime.now() - timedelta(days=7)).strftime(\"%d/%m\")} - {datetime.now().strftime(\"%d/%m/%Y\")}\n\n'
+    
+    if os.path.exists('kraken_trades.csv'):
+        df = pd.read_csv('kraken_trades.csv')
+        if len(df) > 0:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            week_ago = datetime.now() - timedelta(days=7)
+            week = df[df['timestamp'] >= week_ago]
+            
+            if len(week) > 0:
+                pnl = week['pnl_usd'].sum()
+                wins = (week['pnl_usd'] > 0).sum()
+                losses = (week['pnl_usd'] <= 0).sum()
+                wr = (wins / len(week) * 100) if len(week) > 0 else 0
+                avg_pnl = week['pnl_usd'].mean()
+                best = week['pnl_usd'].max()
+                worst = week['pnl_usd'].min()
+                
+                report += f'💼 *TRADING SEMANA:*\n'
+                report += f'Trades: {len(week)}\n'
+                report += f'Ganadas: {wins} | Perdidas: {losses}\n'
+                report += f'Win Rate: {wr:.1f}%\n'
+                report += f'P&L Total: ${pnl:.2f}\n'
+                report += f'P&L Promedio: ${avg_pnl:.2f}\n'
+                report += f'Mejor: ${best:.2f}\n'
+                report += f'Peor: ${worst:.2f}\n\n'
+                
+                # Por tipo
+                buys = week[week['side'] == 'buy']
+                sells = week[week['side'] == 'sell']
+                
+                if len(buys) > 0:
+                    buy_wr = (buys['pnl_usd'] > 0).sum() / len(buys) * 100
+                    buy_pnl = buys['pnl_usd'].sum()
+                    report += f'📈 BUY: {len(buys)} trades (WR: {buy_wr:.1f}%, P&L: ${buy_pnl:.2f})\n'
+                
+                if len(sells) > 0:
+                    sell_wr = (sells['pnl_usd'] > 0).sum() / len(sells) * 100
+                    sell_pnl = sells['pnl_usd'].sum()
+                    report += f'📉 SELL: {len(sells)} trades (WR: {sell_wr:.1f}%, P&L: ${sell_pnl:.2f})\n'
+            else:
+                report += '⏸️ No hay trades esta semana\n'
+    
+    send_telegram(report)
+    print(report)
+    
+except Exception as e:
+    print(f'❌ Error: {e}')
+    send_telegram(f'❌ Error en reporte semanal: {str(e)[:100]}')
+"
+
+  health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Check system health
+        env:
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          echo "🏥 Verificando salud del sistema..."
+          
+          issues=""
+          
+          # Verificar archivos críticos
+          [ ! -d "ETHUSD_MODELS" ] && issues="${issues}❌ Falta ETHUSD_MODELS/\n"
+          [ ! -f "ETHUSD_1h_data.csv" ] && issues="${issues}❌ Falta ETHUSD_1h_data.csv\n"
+          
+          # Verificar última actualización del modelo
+          if [ -f "ETHUSD_MODELS/config_1h.json" ]; then
+            last_update=$(stat -c %Y "ETHUSD_MODELS/config_1h.json")
+            now=$(date +%s)
+            hours_old=$(( ($now - $last_update) / 3600 ))
+            
+            if [ $hours_old -gt 48 ]; then
+              issues="${issues}⚠️ Modelo tiene ${hours_old}h sin actualizar\n"
+            fi
+          fi
+          
+          # Verificar si hay órdenes abiertas hace mucho tiempo
+          if [ -f "open_orders.json" ]; then
+            orders_count=$(grep -c "txid" open_orders.json 2>/dev/null || echo "0")
+            if [ "$orders_count" -gt "0" ]; then
+              echo "⚠️ Hay ${orders_count} órdenes abiertas"
+            fi
+          fi
+          
+          if [ -n "$issues" ]; then
+            echo -e "$issues"
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="🏥 *Health Check*%0A%0A${issues}" \
+              -d parse_mode="Markdown"
+          else
+            echo "✅ Sistema saludable"
+          fi

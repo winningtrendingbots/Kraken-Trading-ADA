@@ -1,0 +1,57 @@
+name: Fix Merge Conflicts
+
+on:
+  workflow_dispatch:  # Solo ejecución manual
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with clean state
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Reset to clean state
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          echo "🔍 Checking repository state..."
+          git status
+          
+          echo "📥 Fetching latest changes..."
+          git fetch origin main
+          
+          echo "🧹 Cleaning working directory..."
+          git reset --hard origin/main
+          
+          echo "✅ Repository is now clean!"
+          git log --oneline -3
+
+      - name: Verify files exist
+        run: |
+          echo "📂 Files in repository:"
+          ls -lah
+          
+          if [ -f "ETHUSD_1h_data.csv" ]; then
+            echo "✅ ETHUSD_1h_data.csv exists"
+          fi
+          
+          if [ -d "ETHUSD_MODELS" ]; then
+            echo "✅ ETHUSD_MODELS/ directory exists"
+            ls -lh ETHUSD_MODELS/
+          fi
+          
+          if [ -f "ethusd_results.png" ]; then
+            echo "✅ ethusd_results.png exists"
+          fi
+
+      - name: Push clean state
+        run: |
+          git push origin main --force-with-lease
+          echo "✅ Clean state pushed successfully!"

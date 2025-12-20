@@ -1,0 +1,329 @@
+name: 🌐 Dashboard Sync
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Cada 15 minutos
+  
+  push:
+    paths:
+      - 'kraken_trades.csv'
+      - 'trading_signals.csv'
+      - 'orders_executed.csv'
+      - 'ethusd_results.png'
+      - 'trading_analytics.png'
+  
+  workflow_dispatch:  # Ejecución manual
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dashboard-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-to-dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 📥 Checkout Kraken-Trading (repo actual)
+        uses: actions/checkout@v4
+        with:
+          path: trading
+          fetch-depth: 1
+      
+      - name: 📥 Checkout winningtrendingbots.github.io (dashboard)
+        uses: actions/checkout@v4
+        with:
+          repository: winningtrendingbots/winningtrendingbots.github.io
+          token: ${{ secrets.DASHBOARD_TOKEN }}
+          path: dashboard
+          fetch-depth: 1
+      
+      - name: 📂 Verificar archivos en trading
+        id: check_files
+        run: |
+          echo "📂 Archivos disponibles:"
+          cd trading
+          
+          files_found=0
+          
+          if [ -f "kraken_trades.csv" ]; then
+            echo "✅ kraken_trades.csv"
+            files_found=$((files_found + 1))
+          fi
+          
+          if [ -f "trading_signals.csv" ]; then
+            echo "✅ trading_signals.csv"
+            files_found=$((files_found + 1))
+          fi
+          
+          if [ -f "orders_executed.csv" ]; then
+            echo "✅ orders_executed.csv"
+            files_found=$((files_found + 1))
+          fi
+          
+          if [ -f "ethusd_results.png" ]; then
+            echo "✅ ethusd_results.png"
+            files_found=$((files_found + 1))
+          fi
+          
+          if [ -f "trading_analytics.png" ]; then
+            echo "✅ trading_analytics.png"
+            files_found=$((files_found + 1))
+          fi
+          
+          echo "has_files=$files_found" >> $GITHUB_OUTPUT
+          echo "Total: $files_found archivos"
+      
+      - name: 📁 Crear estructura en dashboard
+        if: steps.check_files.outputs.has_files > 0
+        run: |
+          cd dashboard
+          
+          # Crear carpetas si no existen
+          mkdir -p data images
+          
+          echo "✅ Estructura creada"
+      
+      - name: 📋 Copiar archivos CSV
+        if: steps.check_files.outputs.has_files > 0
+        run: |
+          # CSV files
+          [ -f "trading/kraken_trades.csv" ] && cp trading/kraken_trades.csv dashboard/data/ && echo "✅ Copied kraken_trades.csv"
+          [ -f "trading/trading_signals.csv" ] && cp trading/trading_signals.csv dashboard/data/ && echo "✅ Copied trading_signals.csv"
+          [ -f "trading/orders_executed.csv" ] && cp trading/orders_executed.csv dashboard/data/ && echo "✅ Copied orders_executed.csv"
+          [ -f "trading/open_orders.json" ] && cp trading/open_orders.json dashboard/data/ && echo "✅ Copied open_orders.json"
+          [ -f "trading/risk_config.json" ] && cp trading/risk_config.json dashboard/data/ && echo "✅ Copied risk_config.json"
+          
+          # Images
+          [ -f "trading/ethusd_results.png" ] && cp trading/ethusd_results.png dashboard/images/ && echo "✅ Copied ethusd_results.png"
+          [ -f "trading/trading_analytics.png" ] && cp trading/trading_analytics.png dashboard/images/ && echo "✅ Copied trading_analytics.png"
+          
+          echo "📋 Archivos copiados"
+      
+      - name: 📊 Generar metadata.json
+        if: steps.check_files.outputs.has_files > 0
+        run: |
+          cd dashboard
+          
+          # Contar líneas en CSVs
+          TRADES=0
+          SIGNALS=0
+          ORDERS=0
+          
+          [ -f "data/kraken_trades.csv" ] && TRADES=$(tail -n +2 data/kraken_trades.csv | wc -l)
+          [ -f "data/trading_signals.csv" ] && SIGNALS=$(tail -n +2 data/trading_signals.csv | wc -l)
+          [ -f "data/orders_executed.csv" ] && ORDERS=$(tail -n +2 data/orders_executed.csv | wc -l)
+          
+          # Verificar imágenes
+          HAS_MODEL="false"
+          HAS_ANALYTICS="false"
+          [ -f "images/ethusd_results.png" ] && HAS_MODEL="true"
+          [ -f "images/trading_analytics.png" ] && HAS_ANALYTICS="true"
+          
+          # Crear metadata
+          cat > data/metadata.json << EOF
+{
+  "last_sync": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "sync_source": "github-actions",
+  "run_id": "${{ github.run_id }}",
+  "repository": "${{ github.repository }}",
+  "files": {
+    "trades": $TRADES,
+    "signals": $SIGNALS,
+    "orders": $ORDERS
+  },
+  "images": {
+    "model_results": $HAS_MODEL,
+    "analytics": $HAS_ANALYTICS
+  }
+}
+EOF
+          
+          echo "📊 metadata.json generado"
+          cat data/metadata.json
+      
+      - name: 🔍 Verificar index.html
+        if: steps.check_files.outputs.has_files > 0
+        run: |
+          cd dashboard
+          
+          if [ ! -f "index.html" ]; then
+            echo "⚠️ No existe index.html, se creará uno básico"
+            
+            cat > index.html << 'HTMLEOF'
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Bot Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 {
+            text-align: center;
+            font-size: 3em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .subtitle {
+            text-align: center;
+            opacity: 0.9;
+            margin-bottom: 40px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .card h2 {
+            font-size: 1.5em;
+            margin-bottom: 15px;
+        }
+        .card a {
+            color: #fff;
+            text-decoration: none;
+            background: rgba(255,255,255,0.2);
+            padding: 10px 20px;
+            border-radius: 8px;
+            display: inline-block;
+            margin: 5px;
+        }
+        .card a:hover { background: rgba(255,255,255,0.3); }
+        .images {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 20px;
+        }
+        .images img {
+            width: 100%;
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+        }
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Trading Bot Dashboard</h1>
+        <p class="subtitle">Datos en tiempo real del bot de trading</p>
+        
+        <div class="grid">
+            <div class="card">
+                <h2>📊 Datos CSV</h2>
+                <a href="data/kraken_trades.csv" download>📥 Trades</a>
+                <a href="data/trading_signals.csv" download>📥 Señales</a>
+                <a href="data/orders_executed.csv" download>📥 Órdenes</a>
+            </div>
+            
+            <div class="card">
+                <h2>⚙️ Config</h2>
+                <a href="data/metadata.json" download>📥 Metadata</a>
+                <a href="data/open_orders.json" download>📥 Órdenes Abiertas</a>
+                <a href="data/risk_config.json" download>📥 Risk Config</a>
+            </div>
+            
+            <div class="card">
+                <h2>📈 Gráficas</h2>
+                <a href="images/ethusd_results.png" target="_blank">🖼️ Modelo LSTM</a>
+                <a href="images/trading_analytics.png" target="_blank">🖼️ Analytics</a>
+            </div>
+        </div>
+        
+        <div class="images">
+            <img src="images/ethusd_results.png" alt="Resultados" onerror="this.style.display='none'">
+            <img src="images/trading_analytics.png" alt="Analytics" onerror="this.style.display='none'">
+        </div>
+        
+        <div class="footer">
+            <p>Última actualización: <span id="lastUpdate">Cargando...</span></p>
+        </div>
+    </div>
+    
+    <script>
+        fetch('data/metadata.json')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('lastUpdate').textContent = 
+                    new Date(data.last_sync).toLocaleString('es-ES');
+            })
+            .catch(() => {
+                document.getElementById('lastUpdate').textContent = 'Error';
+            });
+    </script>
+</body>
+</html>
+HTMLEOF
+            
+            echo "✅ index.html básico creado"
+          else
+            echo "✅ index.html ya existe (no se modifica)"
+          fi
+      
+      - name: 💾 Commit y push
+        if: steps.check_files.outputs.has_files > 0
+        run: |
+          cd dashboard
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add data/ images/ index.html 2>/dev/null || true
+          
+          if git diff --staged --quiet; then
+            echo "ℹ️ No hay cambios"
+          else
+            TRADES=0
+            [ -f data/kraken_trades.csv ] && TRADES=$(tail -n +2 data/kraken_trades.csv | wc -l)
+            
+            git commit -m "🌐 Dashboard sync [$(date +'%Y-%m-%d %H:%M UTC')] Trades: $TRADES"
+            git push origin main
+            
+            echo "✅ Dashboard sincronizado"
+            echo ""
+            echo "═══════════════════════════════════════"
+            echo "  🌐 DASHBOARD ACTUALIZADO"
+            echo "═══════════════════════════════════════"
+            echo "URL: https://winningtrendingbots.github.io/"
+            echo "═══════════════════════════════════════"
+          fi
+      
+      - name: 📱 Notificar sincronización
+        if: always() && steps.check_files.outputs.has_files > 0
+        env:
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          URL="https://winningtrendingbots.github.io/"
+          
+          MSG="🌐 *Dashboard Sync*%0A%0A"
+          MSG="${MSG}✅ Sincronizado: ${{ steps.check_files.outputs.has_files }} archivos%0A"
+          MSG="${MSG}📅 $(date +'%Y-%m-%d %H:%M UTC')%0A%0A"
+          MSG="${MSG}🔗 ${URL}"
+          
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MSG}" \
+            -d parse_mode="Markdown" || echo "⚠️ Telegram notification failed"

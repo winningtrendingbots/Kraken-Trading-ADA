@@ -1,0 +1,53 @@
+name: Update Dashboard Data
+
+on:
+  schedule:
+    # Se ejecuta cada hora
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # Permite ejecución manual
+
+permissions:
+  contents: write
+
+jobs:
+  sync-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dashboard repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          path: dashboard
+
+      - name: Checkout trading repo
+        uses: actions/checkout@v4
+        with:
+          repository: winningtrendingbots/Kraken-Trading
+          path: trading
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copy CSV files
+        run: |
+          # Copiar archivos CSV del repo de trading al dashboard
+          cp trading/kraken_trades.csv dashboard/data/kraken_trades.csv || echo "No trades file"
+          cp trading/trading_signals.csv dashboard/data/trading_signals.csv || echo "No signals file"
+          cp trading/orders_executed.csv dashboard/data/orders_executed.csv || echo "No executed file"
+
+      - name: Create data directory if not exists
+        run: |
+          cd dashboard
+          mkdir -p data
+
+      - name: Commit and push
+        run: |
+          cd dashboard
+          git config user.name "github-actions"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/*.csv || true
+          
+          if ! git diff --staged --quiet; then
+            git commit -m "Update trading data [$(date +'%Y-%m-%d %H:%M')]"
+            git push
+          else
+            echo "No changes to commit"
+          fi
