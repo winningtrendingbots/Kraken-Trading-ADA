@@ -23,6 +23,14 @@ CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 TRADES_FILE = 'kraken_trades.csv'
 OPEN_ORDERS_FILE = 'open_orders.json'
 
+# 🔥 MODO DE OPERACIÓN
+LIVE_TRADING = False  # ⚠️ Cambiar a True para trading real
+# ⚠️ IMPORTANTE: Solo activar LIVE_TRADING cuando:
+#    1. Hayas verificado que todo funciona en simulación
+#    2. Tengas fondos suficientes en Kraken
+#    3. Hayas configurado correctamente las API keys
+#    4. Entiendas los riesgos del trading con leverage
+
 def send_telegram(msg):
     if not TELEGRAM_API or not CHAT_ID:
         print("⚠️ Telegram no configurado")
@@ -57,9 +65,17 @@ def get_current_price():
     return None
 
 def get_balance():
+    """Obtiene balance real de Kraken"""
     data = {'nonce': str(int(1000*time.time()))}
     result = kraken_request('/0/private/Balance', data)
     return result
+
+def get_usd_balance():
+    """Obtiene balance en USD disponible"""
+    balance = get_balance()
+    if 'result' in balance and 'ZUSD' in balance['result']:
+        return float(balance['result']['ZUSD'])
+    return 0
 
 def place_order(side, volume, price, tp_price, sl_price):
     """
@@ -75,6 +91,7 @@ def place_order(side, volume, price, tp_price, sl_price):
         'type': side,
         'volume': str(volume),
         'pair': 'XADAZUSD',
+        'leverage': '10'  # 🔥 LEVERAGE 10X
     }
     
     if price:
@@ -111,11 +128,10 @@ def calculate_tp_sl(entry_price, side, atr, pred_high, pred_low, tp_percentage=0
     
     return round(tp, 2), round(sl, 2)
 
-# ... (mantener todo el código anterior hasta la línea 80) ...
-
 def monitor_orders():
-    """Monitorea órdenes abiertas y cierra por TP/SL/tiempo - CADA 5 MINUTOS"""
+    """Monitorea órdenes abiertas y cierra por TP/SL/tiempo - CADA 15 MINUTOS"""
     if not os.path.exists(OPEN_ORDERS_FILE):
+        print("ℹ️ No hay archivo de órdenes abiertas")
         return
     
     with open(OPEN_ORDERS_FILE, 'r') as f:
@@ -130,9 +146,7 @@ def monitor_orders():
         print("❌ No se pudo obtener precio actual")
         return
     
-    # Cargar Risk Manager
     risk_manager = get_risk_manager()
-    
     updated_orders = []
     
     for order in orders:
@@ -143,18 +157,15 @@ def monitor_orders():
         sl = order['sl']
         open_time = datetime.fromisoformat(order['open_time'])
         volume = order['volume']
+        margin_reserved = order.get('margin_required', 0)
         
-        time_open = (datetime.now() - open_time).total_seconds() / 60  # en minutos
+        time_open = (datetime.now() - open_time).total_seconds() / 60
         
         should_close = False
         close_reason = None
         close_price = current_price
         
-        # ═══════════════════════════════════════════════════════════
-        # CONFIGURACIÓN DE CIERRES - AJUSTA AQUÍ
-        # ═══════════════════════════════════════════════════════════
-        
-        # 1. Verificar TP (Take Profit)
+        # 1. Verificar TP
         if side == 'buy' and current_price >= tp:
             should_close = True
             close_reason = 'TP'
@@ -162,7 +173,7 @@ def monitor_orders():
             should_close = True
             close_reason = 'TP'
         
-        # 2. Verificar SL (Stop Loss)
+        # 2. Verificar SL
         elif side == 'buy' and current_price <= sl:
             should_close = True
             close_reason = 'SL'
@@ -170,24 +181,20 @@ def monitor_orders():
             should_close = True
             close_reason = 'SL'
         
-        # 3. TIMEOUT - Cerrar después de X minutos
-        # ⚠️ AJUSTA AQUÍ EL TIMEOUT ⚠️
-        elif time_open >= 300:  # 300 minutos = 5 horas
+        # 3. TIMEOUT - 5 horas
+        elif time_open >= 300:
             should_close = True
             close_reason = 'TIMEOUT'
         
-        # 4. STOP LOSS PROGRESIVO (Opcional)
-        # Cierra si pierde más de X% en los primeros Y minutos
-        elif time_open <= 10:  # Primeros 10 minutos
+        # 4. STOP LOSS PROGRESIVO
+        elif time_open <= 10:
             loss_pct = ((current_price - entry_price) / entry_price) * 100
-            if side == 'buy' and loss_pct < -1.0:  # Pierde más de 1%
+            if side == 'buy' and loss_pct < -1.0:
                 should_close = True
                 close_reason = 'QUICK_LOSS'
             elif side == 'sell' and loss_pct > 1.0:
                 should_close = True
                 close_reason = 'QUICK_LOSS'
-        
-        # ═══════════════════════════════════════════════════════════
         
         if should_close:
             print(f"🔴 Cerrando orden {txid[:8]}... por {close_reason}")
@@ -195,12 +202,12 @@ def monitor_orders():
             print(f"   Precio entrada: ${entry_price:.2f}")
             print(f"   Precio cierre: ${close_price:.2f}")
             
-            # Cancelar en Kraken
-            # ⚠️ DESCOMENTAR PARA TRADING REAL ⚠️
-            # cancel_result = cancel_order(txid)
-            # print(f"   Kraken cancel: {cancel_result}")
-            
-            print("   ⚠️ MODO SIMULACIÓN - Orden NO cancelada en Kraken")
+            # 🔥 CERRAR EN KRAKEN SI LIVE_TRADING
+            if LIVE_TRADING:
+                cancel_result = cancel_order(txid)
+                print(f"   Kraken cancel: {cancel_result}")
+            else:
+                print("   ⚠️ MODO SIMULACIÓN - Orden NO cancelada en Kraken")
             
             # Calcular P&L
             if side == 'buy':
@@ -210,8 +217,8 @@ def monitor_orders():
                 pnl = (entry_price - close_price) * volume
                 pnl_pct = ((entry_price - close_price) / entry_price) * 100
             
-            # Actualizar capital en Risk Manager
-            risk_manager.update_after_trade(pnl)
+            # Actualizar capital y liberar margen
+            risk_manager.update_after_trade(pnl, margin_released=margin_reserved)
             
             # Guardar en CSV
             trade_data = {
@@ -239,9 +246,10 @@ def monitor_orders():
             emoji = "✅" if pnl > 0 else "❌"
             stats = risk_manager.get_stats()
             
+            mode = "🔥 LIVE" if LIVE_TRADING else "💼 SIMULACIÓN"
+            
             msg = f"""
-🚀 *Nueva Orden Ejecutada*
- *Orden Cerrada*
+{emoji} *Orden Cerrada* {mode}
 
 📖 ID: {txid[:8]}...
 📊 Tipo: {side.upper()}
@@ -251,6 +259,7 @@ def monitor_orders():
 ⏱️ Tiempo: {time_open:.1f} min
 
 💵 P&L: ${pnl:.2f} ({pnl_pct:+.2f}%)
+🔓 Margen Liberado: ${margin_reserved:.2f}
 
 📈 *Capital:*
    Actual: ${stats['current_capital']:.2f}
@@ -259,14 +268,10 @@ def monitor_orders():
 """
             send_telegram(msg)
         else:
-            # Mantener orden abierta
             updated_orders.append(order)
-            
-            # Log de seguimiento
-            time_left = 300 - time_open  # Asumiendo timeout de 300 min
+            time_left = 300 - time_open
             print(f"📊 {txid[:8]}... | {side.upper()} | {time_open:.1f}min | Quedan {time_left:.1f}min")
     
-    # Actualizar archivo
     with open(OPEN_ORDERS_FILE, 'w') as f:
         json.dump(updated_orders, f, indent=2)
     
@@ -275,12 +280,9 @@ def monitor_orders():
     else:
         print("✅ Todas las órdenes fueron cerradas")
 
-# ... (mantener resto del código igual) ...
-
 def execute_signal():
     """Lee última señal y ejecuta si es BUY/SELL con gestión de riesgo"""
     
-    # Leer última señal
     signals_file = 'trading_signals.csv'
     if not os.path.exists(signals_file):
         print("❌ No hay señales disponibles")
@@ -292,14 +294,22 @@ def execute_signal():
     signal = latest['signal']
     
     if signal == 'HOLD':
-        print("⏸️ Señal HOLD - No hay acción")
+        print("⸮️ Señal HOLD - No hay acción")
         return
     
     # Cargar Risk Manager
     risk_manager = get_risk_manager()
+    
+    # 🔥 SINCRONIZAR CON BALANCE REAL DE KRAKEN
+    if LIVE_TRADING:
+        kraken_balance = get_usd_balance()
+        if kraken_balance > 0:
+            risk_manager.sync_with_kraken_balance(kraken_balance)
+            print(f"✅ Balance sincronizado con Kraken: ${kraken_balance:.2f}")
+    
     risk_manager.print_stats()
     
-    # Verificar si ya hay orden abierta
+    # Verificar máximo de posiciones
     if os.path.exists(OPEN_ORDERS_FILE):
         with open(OPEN_ORDERS_FILE, 'r') as f:
             open_orders = json.load(f)
@@ -307,7 +317,6 @@ def execute_signal():
             print(f"⚠️ Máximo de posiciones ({risk_manager.max_open_positions}) alcanzado")
             return
     
-    # Obtener datos necesarios
     current_price = get_current_price()
     if not current_price:
         print("❌ No se pudo obtener precio actual")
@@ -318,16 +327,14 @@ def execute_signal():
     pred_low = latest['pred_low']
     confidence = latest['confidence']
     
-    # Calcular TP y SL
     side = signal.lower()
     tp, sl = calculate_tp_sl(current_price, side, atr, pred_high, pred_low, tp_percentage=0.80)
     
-    # 🔥 VALIDAR TRADE CON RISK MANAGER
     print(f"\n{'='*70}")
-    print(f"  VALIDANDO TRADE")
+    print(f"  🔍 VALIDANDO TRADE")
     print(f"{'='*70}")
     
-    # 1. Validar Risk/Reward
+    # Validar R/R
     trade_validation = risk_manager.validate_trade(current_price, tp, sl, side)
     
     if not trade_validation['valid']:
@@ -340,8 +347,8 @@ def execute_signal():
     print(f"   Risk: ${trade_validation['risk']:.2f}")
     print(f"   Reward: ${trade_validation['reward']:.2f}")
     
-    # 2. Calcular tamaño de posición
-    position = risk_manager.calculate_position_size(current_price, sl, confidence, side)
+    # Calcular posición con leverage 10x
+    position = risk_manager.calculate_position_size(current_price, sl, confidence, side, use_leverage=True)
     
     if not position['valid']:
         print(f"❌ Posición rechazada: {position['reason']}")
@@ -352,33 +359,125 @@ def execute_signal():
     volume = position['volume']
     
     print(f"\n{'='*70}")
-    print(f"🚀 EJECUTANDO ORDEN CON GESTIÓN DE RIESGO")
+    print(f"🚀 EJECUTANDO ORDEN CON LEVERAGE 10X")
     print(f"{'='*70}")
     print(f"📊 Señal: {signal}")
     print(f"💰 Precio: ${current_price:.2f}")
     print(f"📈 Volumen: {volume} ADA (${position['position_value']:.2f})")
-    print(f"   • Riesgo: ${position['risk_amount']:.2f} ({risk_manager.risk_per_trade*100}%)")
+    print(f"   • Leverage: {position['leverage']}x")
+    print(f"   • Riesgo: ${position['risk_amount']:.2f}")
+    print(f"   • Margen Req: ${position['margin_required']:.2f}")
     print(f"   • Capital usado: {position['capital_used_%']:.1f}%")
-    print(f"   • Mult. confianza: {position['confidence_multiplier']:.2f}x")
     print(f"🎯 TP: ${tp:.2f} ({((tp-current_price)/current_price*100):+.2f}%)")
     print(f"🛑 SL: ${sl:.2f} ({((sl-current_price)/current_price*100):+.2f}%)")
+    print(f"⚠️ Liquidación: ${position['liquidation_price']:.2f}")
     print(f"📊 R/R: {trade_validation['rr_ratio']:.2f}")
     print(f"🎲 Confianza: {confidence:.1f}%")
     print(f"{'='*70}\n")
     
-    # SIMULACIÓN - Descomentar para trading real
-    print("⚠️ MODO SIMULACIÓN - Orden NO enviada a Kraken")
-    print("   Para trading real, descomentar bloque de código")
-    
-    # Descomentar para ejecutar en real:
-    
-    result = place_order(side, volume, None, tp, sl)
-    
-    if 'result' in result and 'txid' in result['result']:
-        txid = result['result']['txid'][0]
-        print(f"✅ Orden ejecutada: {txid}")
+    # 🔥 EJECUCIÓN REAL O SIMULADA
+    if LIVE_TRADING:
+        print("🔥 MODO LIVE - Enviando orden a Kraken...")
+        result = place_order(side, volume, None, tp, sl)
         
-        # Guardar orden abierta
+        if 'result' in result and 'txid' in result['result']:
+            txid = result['result']['txid'][0]
+            print(f"✅ Orden ejecutada en Kraken: {txid}")
+            
+            # Reservar margen
+            risk_manager.reserve_margin(position['margin_required'])
+            
+            # Guardar orden abierta
+            order_data = {
+                'txid': txid,
+                'side': side,
+                'entry_price': current_price,
+                'volume': volume,
+                'tp': tp,
+                'sl': sl,
+                'open_time': datetime.now().isoformat(),
+                'signal_confidence': confidence,
+                'rr_ratio': trade_validation['rr_ratio'],
+                'risk_amount': position['risk_amount'],
+                'margin_required': position['margin_required'],
+                'leverage': position['leverage'],
+                'liquidation_price': position['liquidation_price']
+            }
+            
+            orders = []
+            if os.path.exists(OPEN_ORDERS_FILE):
+                with open(OPEN_ORDERS_FILE, 'r') as f:
+                    orders = json.load(f)
+            
+            orders.append(order_data)
+            with open(OPEN_ORDERS_FILE, 'w') as f:
+                json.dump(orders, f, indent=2)
+            
+            # CSV de ejecución
+            trade_data = {
+                'timestamp': datetime.now(),
+                'txid': txid,
+                'side': side,
+                'entry_price': current_price,
+                'volume': volume,
+                'tp': tp,
+                'sl': sl,
+                'confidence': confidence,
+                'rr_ratio': trade_validation['rr_ratio'],
+                'risk_amount': position['risk_amount'],
+                'leverage': position['leverage'],
+                'order_executed': 'YES',
+                'order_type': signal
+            }
+            
+            df = pd.DataFrame([trade_data])
+            exec_file = 'orders_executed.csv'
+            if os.path.exists(exec_file):
+                df.to_csv(exec_file, mode='a', header=False, index=False)
+            else:
+                df.to_csv(exec_file, index=False)
+            
+            # Telegram
+            stats = risk_manager.get_stats()
+            msg = f"""
+🔥 *LIVE TRADING - Nueva Orden*
+
+📊 Tipo: {signal}
+💰 Entrada: ${current_price:.2f}
+📈 Volumen: {volume} ADA
+⚡ Leverage: {position['leverage']}x
+   • Valor: ${position['position_value']:.2f}
+   • Margen: ${position['margin_required']:.2f}
+   • Riesgo: ${position['risk_amount']:.2f}
+
+🎯 TP: ${tp:.2f} ({((tp-current_price)/current_price*100):+.2f}%)
+🛑 SL: ${sl:.2f} ({((sl-current_price)/current_price*100):+.2f}%)
+⚠️ Liquidación: ${position['liquidation_price']:.2f}
+📊 R/R: {trade_validation['rr_ratio']:.2f}
+🎲 Confianza: {confidence:.1f}%
+
+📈 *Estado Cuenta:*
+   Capital: ${stats['current_capital']:.2f}
+   Margen Usado: ${stats['margin_used']:.2f}
+   Posiciones: {stats['open_positions']}/{risk_manager.max_open_positions}
+"""
+            send_telegram(msg)
+        else:
+            error = result.get('error', 'Unknown error')
+            print(f"❌ Error al ejecutar orden: {error}")
+            send_telegram(f"❌ Error ejecutando orden: {error}")
+    
+    else:
+        # MODO SIMULACIÓN
+        print("💼 MODO SIMULACIÓN - Orden NO enviada a Kraken")
+        print("   ⚠️ Para activar trading real, cambiar LIVE_TRADING = True")
+        
+        # Simular orden guardada
+        txid = f"SIM_{int(time.time())}"
+        
+        # Reservar margen en simulación
+        risk_manager.reserve_margin(position['margin_required'])
+        
         order_data = {
             'txid': txid,
             'side': side,
@@ -389,7 +488,10 @@ def execute_signal():
             'open_time': datetime.now().isoformat(),
             'signal_confidence': confidence,
             'rr_ratio': trade_validation['rr_ratio'],
-            'risk_amount': position['risk_amount']
+            'risk_amount': position['risk_amount'],
+            'margin_required': position['margin_required'],
+            'leverage': position['leverage'],
+            'liquidation_price': position['liquidation_price']
         }
         
         orders = []
@@ -401,7 +503,7 @@ def execute_signal():
         with open(OPEN_ORDERS_FILE, 'w') as f:
             json.dump(orders, f, indent=2)
         
-        # Registro en CSV
+        # CSV
         trade_data = {
             'timestamp': datetime.now(),
             'txid': txid,
@@ -413,7 +515,8 @@ def execute_signal():
             'confidence': confidence,
             'rr_ratio': trade_validation['rr_ratio'],
             'risk_amount': position['risk_amount'],
-            'order_executed': 'YES',
+            'leverage': position['leverage'],
+            'order_executed': 'SIMULATED',
             'order_type': signal
         }
         
@@ -427,46 +530,42 @@ def execute_signal():
         # Telegram
         stats = risk_manager.get_stats()
         msg = f"""
-🚀 *Nueva Orden Ejecutada*
+💼 *SIMULACIÓN - Nueva Orden*
 
 📊 Tipo: {signal}
 💰 Entrada: ${current_price:.2f}
-📈 Volumen: {volume} ADA (${position['position_value']:.2f})
+📈 Volumen: {volume} ADA
+⚡ Leverage: {position['leverage']}x
+   • Valor: ${position['position_value']:.2f}
+   • Margen: ${position['margin_required']:.2f}
    • Riesgo: ${position['risk_amount']:.2f}
-   • Capital: {position['capital_used_%']:.1f}%
 
 🎯 TP: ${tp:.2f} ({((tp-current_price)/current_price*100):+.2f}%)
 🛑 SL: ${sl:.2f} ({((sl-current_price)/current_price*100):+.2f}%)
+⚠️ Liquidación: ${position['liquidation_price']:.2f}
 📊 R/R: {trade_validation['rr_ratio']:.2f}
-🎲 Confianza: {confidence:.1f}%
 
-📈 *Estado Cuenta:*
-   Capital: ${stats['current_capital']:.2f}
-   Posiciones: {stats['open_positions']}/{risk_manager.max_open_positions}
-   WR: {stats['win_rate']:.1f}%
+⚠️ *MODO SIMULACIÓN*
+Para trading real: LIVE_TRADING = True
 """
         send_telegram(msg)
-        
-    else:
-        error = result.get('error', 'Unknown error')
-        print(f"❌ Error al ejecutar orden: {error}")
-        send_telegram(f"❌ Error ejecutando orden: {error}")
-    
 
 def main():
+    mode = "🔥 LIVE TRADING" if LIVE_TRADING else "💼 SIMULACIÓN"
+    
     print("="*70)
-    print("  🤖 KRAKEN TRADER BOT - CON GESTIÓN DE RIESGO")
+    print(f"  🤖 KRAKEN TRADER BOT - {mode}")
     print("="*70)
     
-    # 1. Monitorear órdenes existentes
+    # 1. Monitorear órdenes
     print("\n🔍 Monitoreando órdenes abiertas...")
     monitor_orders()
     
-    # 2. Verificar nueva señal y ejecutar si corresponde
+    # 2. Verificar señal
     print("\n📊 Verificando nuevas señales...")
     execute_signal()
     
-    # 3. Mostrar resumen
+    # 3. Resumen
     risk_manager = get_risk_manager()
     risk_manager.print_stats()
     
