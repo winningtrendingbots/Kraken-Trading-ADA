@@ -24,7 +24,7 @@ TRADES_FILE = 'kraken_trades.csv'
 OPEN_ORDERS_FILE = 'open_orders.json'
 
 # 🔥 MODO DE OPERACIÓN
-LIVE_TRADING = False  # ⚠️ Cambiar a True para trading real
+LIVE_TRADING = True  # ⚠️ Cambiar a True para trading real
 # ⚠️ IMPORTANTE: Solo activar LIVE_TRADING cuando:
 #    1. Hayas verificado que todo funciona en simulación
 #    2. Tengas fondos suficientes en Kraken
