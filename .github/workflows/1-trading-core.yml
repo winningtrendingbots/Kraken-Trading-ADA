@@ -96,14 +96,14 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           echo "🔧 Iniciando entrenamiento..."
-          python ethusd_lstm.py
+          python adausd_lstm.py
       
       - name: ✅ Verificar archivos generados
         run: |
           echo "📂 Archivos generados:"
-          [ -d "ETHUSD_MODELS" ] && ls -lh ETHUSD_MODELS/ || echo "❌ No se generó ETHUSD_MODELS/"
-          [ -f "ETHUSD_1h_data.csv" ] && echo "✅ CSV generado" || echo "❌ No se generó CSV"
-          [ -f "ethusd_results.png" ] && echo "✅ Gráfica generada" || echo "❌ No se generó gráfica"
+          [ -d "ADAUSD_MODELS" ] && ls -lh ADAUSD_MODELS/ || echo "❌ No se generó ADAUSD_MODELS/"
+          [ -f "ADAUSD_1h_data.csv" ] && echo "✅ CSV generado" || echo "❌ No se generó CSV"
+          [ -f "adausd_results.png" ] && echo "✅ Gráfica generada" || echo "❌ No se generó gráfica"
       
       - name: 💾 Guardar modelo
         run: |
@@ -112,7 +112,7 @@ jobs:
           
           git pull --rebase origin main || true
           
-          git add ETHUSD_MODELS/ ETHUSD_1h_data.csv ethusd_results.png risk_config.json 2>/dev/null || true
+          git add ADAUSD_MODELS/ ADAUSD_1h_data.csv adausd_results.png risk_config.json 2>/dev/null || true
           
           if git diff --staged --quiet; then
             echo "ℹ️ No hay cambios"
@@ -152,8 +152,8 @@ jobs:
       
       - name: ✅ Verificar modelo existe
         run: |
-          if [ ! -d "ETHUSD_MODELS" ]; then
-            echo "❌ ERROR: No existe ETHUSD_MODELS/"
+          if [ ! -d "ADAUSD_MODELS" ]; then
+            echo "❌ ERROR: No existe ADAUSD_MODELS/"
             echo "🔧 Ejecuta primero: workflow_dispatch → train"
             exit 1
           fi
