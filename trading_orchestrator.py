@@ -17,8 +17,8 @@ import pandas as pd
 import os
 
 # Telegram
-TELEGRAM_API = '8286372753:AAF356kUIEbZRI-Crdo4jIrXc89drKGWIWY'
-CHAT_ID = '5825443798'
+TELEGRAM_API = os.environ.get('TELEGRAM_API', '')
+CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 
 def send_telegram(msg):
     try:
