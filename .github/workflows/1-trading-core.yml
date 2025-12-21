@@ -68,6 +68,7 @@ jobs:
 
   # ========================================
   # JOB 2: ENTRENAR MODELO (1 VEZ AL DÍA)
+  # 🆕 CON MANEJO MEJORADO DE CONFLICTOS
   # ========================================
   train-model:
     needs: determine-task
@@ -100,41 +101,156 @@ jobs:
           python adausd_lstm.py
       
       - name: ✅ Verificar archivos generados
+        id: check_files
         run: |
-          echo "📂 Archivos generados:"
-          [ -d "ADAUSD_MODELS" ] && ls -lh ADAUSD_MODELS/ || echo "❌ No se generó ADAUSD_MODELS/"
-          [ -f "ADAUSD_1h_data.csv" ] && echo "✅ CSV generado" || echo "❌ No se generó CSV"
-          [ -f "adausd_results.png" ] && echo "✅ Gráfica generada" || echo "❌ No se generó gráfica"
+          echo "📂 Verificando archivos generados..."
+          
+          files_ok=true
+          
+          if [ -d "ADAUSD_MODELS" ]; then
+            echo "✅ ADAUSD_MODELS/ generado"
+            ls -lh ADAUSD_MODELS/
+          else
+            echo "❌ ADAUSD_MODELS/ NO generado"
+            files_ok=false
+          fi
+          
+          if [ -f "ADAUSD_1h_data.csv" ]; then
+            echo "✅ ADAUSD_1h_data.csv generado"
+          else
+            echo "❌ ADAUSD_1h_data.csv NO generado"
+            files_ok=false
+          fi
+          
+          if [ -f "adausd_results.png" ]; then
+            echo "✅ adausd_results.png generado"
+          else
+            echo "⚠️ adausd_results.png NO generado (no crítico)"
+          fi
+          
+          echo "files_ok=$files_ok" >> $GITHUB_OUTPUT
       
-      - name: 💾 Guardar modelo y archivos
+      - name: 💾 Guardar modelo y archivos (CON MANEJO DE CONFLICTOS)
+        if: steps.check_files.outputs.files_ok == 'true'
         run: |
+          echo "🔧 Configurando Git..."
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           echo "📥 Sincronizando con remoto..."
-          git pull --rebase origin main || true
+          # Fetch primero para ver el estado
+          git fetch origin main
           
-          echo "➕ Agregando archivos..."
-          git add -f ADAUSD_MODELS/ || echo "⚠️ No se pudo agregar ADAUSD_MODELS/"
-          git add -f ADAUSD_1h_data.csv || echo "⚠️ No se pudo agregar CSV"
-          git add -f adausd_results.png || echo "⚠️ No se pudo agregar PNG"
-          git add -f LAST_TRAINING.txt || echo "⚠️ No se pudo agregar timestamp"
-          git add -f risk_config.json 2>/dev/null || true
+          # Ver si hay divergencia
+          LOCAL=$(git rev-parse HEAD)
+          REMOTE=$(git rev-parse origin/main)
           
-          # Siempre hacer commit
-          if git diff --staged --quiet; then
-            echo "⚠️ No hay cambios detectados, creando commit vacío con timestamp..."
-            git commit --allow-empty -m "🤖 Model training completed [$(date +'%Y-%m-%d %H:%M UTC')]"
+          if [ "$LOCAL" != "$REMOTE" ]; then
+            echo "⚠️ Detectada divergencia con remoto"
+            echo "   Local:  $LOCAL"
+            echo "   Remote: $REMOTE"
+            
+            # Stash cambios actuales
+            echo "📦 Guardando cambios temporalmente..."
+            git stash --include-untracked
+            
+            # Pull del remoto
+            echo "📥 Obteniendo cambios remotos..."
+            git pull --rebase origin main || {
+              echo "❌ Error en pull, intentando reset..."
+              git rebase --abort 2>/dev/null || true
+              git reset --hard origin/main
+            }
+            
+            # Aplicar nuestros cambios encima
+            echo "📤 Aplicando nuestros cambios..."
+            git stash pop || {
+              echo "⚠️ Conflicto al aplicar stash, forzando nuestros cambios..."
+              git checkout --theirs ADAUSD_MODELS/ ADAUSD_1h_data.csv adausd_results.png 2>/dev/null || true
+              git stash drop
+            }
           else
-            echo "✅ Cambios detectados, commiteando..."
-            git commit -m "🤖 Model trained [$(date +'%Y-%m-%d %H:%M UTC')]"
+            echo "✅ Repo sincronizado con remoto"
           fi
           
           echo ""
-          echo "📤 Pushing to remote..."
-          git push origin main
+          echo "➕ Agregando archivos..."
           
-          echo "✅ Modelo y archivos guardados exitosamente"
+          # Agregar forzadamente los archivos del modelo
+          git add -f ADAUSD_MODELS/ 2>/dev/null || echo "⚠️ ADAUSD_MODELS/ no añadido"
+          git add -f ADAUSD_1h_data.csv 2>/dev/null || echo "⚠️ CSV no añadido"
+          git add -f adausd_results.png 2>/dev/null || echo "⚠️ PNG no añadido"
+          git add -f LAST_TRAINING.txt 2>/dev/null || true
+          git add -f risk_config.json 2>/dev/null || true
+          
+          echo ""
+          echo "📋 Estado de Git:"
+          git status --short
+          
+          echo ""
+          echo "💾 Commiteando..."
+          
+          # Siempre commitear, incluso si no hay cambios visibles
+          if git diff --staged --quiet; then
+            echo "⚠️ No hay cambios staged, creando commit con --allow-empty"
+            git commit --allow-empty -m "🤖 Model trained [$(date +'%Y-%m-%d %H:%M UTC')]"
+          else
+            echo "✅ Cambios detectados, commiteando..."
+            
+            # Contar archivos cambiados
+            FILES_CHANGED=$(git diff --staged --name-only | wc -l)
+            
+            git commit -m "🤖 Model trained [$(date +'%Y-%m-%d %H:%M UTC')]
+
+Files updated: $FILES_CHANGED
+- ADAUSD_MODELS/
+- ADAUSD_1h_data.csv
+- adausd_results.png
+"
+          fi
+          
+          echo ""
+          echo "📤 Pushing a remoto..."
+          
+          # Intentar push normal primero
+          if git push origin main; then
+            echo "✅ Push exitoso (normal)"
+          else
+            echo "⚠️ Push normal falló, intentando con --force-with-lease..."
+            
+            # Force con protección (solo si nuestro commit es más reciente)
+            if git push --force-with-lease origin main; then
+              echo "✅ Push exitoso (force-with-lease)"
+            else
+              echo "❌ Push falló incluso con force-with-lease"
+              echo "🔄 Último intento: pull + push..."
+              
+              git pull --rebase origin main || git rebase --abort
+              
+              # Intentar una vez más
+              git push origin main || {
+                echo "❌ ERROR: No se pudo hacer push después de múltiples intentos"
+                echo "📋 Logs para debugging:"
+                git log --oneline -5
+                exit 1
+              }
+            fi
+          fi
+          
+          echo ""
+          echo "✅ ¡Modelo guardado exitosamente!"
+      
+      - name: 📦 Backup artifacts (por seguridad)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-backup-${{ github.run_number }}
+          path: |
+            ADAUSD_MODELS/
+            ADAUSD_1h_data.csv
+            adausd_results.png
+            LAST_TRAINING.txt
+          retention-days: 7
 
   # ========================================
   # JOB 3: PREDICCIÓN + TRADING (CADA 5 MIN)
