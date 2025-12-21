@@ -1,12 +1,10 @@
 """
-GESTOR DE RIESGO Y CAPITAL CON MARGEN - CONFIGURADO PARA 10X LEVERAGE
+GESTOR DE RIESGO Y CAPITAL CON MARGEN - CONFIGURADO PARA BANCA PEQUEÑA (10€)
 
-Características:
-- Leverage máximo: 10x
-- Gestión automática de margen de Kraken
-- Cálculo de precio de liquidación
-- Buffers de seguridad
-- Integración con balance real de Kraken
+🆕 Optimizado para:
+- Banca inicial: 10€
+- Leverage: 3-5x (más seguro que 10x con banca pequeña)
+- Posiciones pequeñas pero seguras
 """
 
 import json
@@ -15,15 +13,15 @@ from datetime import datetime
 
 class RiskManager:
     def __init__(self, 
-                 initial_capital=30,           # Capital inicial en USD
-                 risk_per_trade=0.015,           # 1.5% de riesgo por trade (reducido por leverage alto)
-                 max_leverage=10,                # ⚡ LEVERAGE 10X ACTIVADO
-                 margin_usage_limit=0.5,         # Usar máximo 50% del margen disponible
-                 max_open_positions=3,           # Máximo 3 posiciones simultáneas
-                 min_rr_ratio=1.5,              # Mínimo Risk/Reward 1:1.5
-                 liquidation_buffer=0.25,        # 25% de buffer antes de liquidación (importante con 10x)
-                 max_position_size=0.25,         # Máximo 25% del capital por posición (reducido)
-                 confidence_threshold=65):       # Confianza mínima 65% (subido por leverage alto)
+                 initial_capital=10,             # 🆕 10€ inicial (se sincroniza con Kraken)
+                 risk_per_trade=0.02,             # 2% de riesgo por trade
+                 max_leverage=5,                  # 🆕 5x max (más seguro con banca pequeña)
+                 margin_usage_limit=0.6,          # Usar máximo 60% del margen
+                 max_open_positions=1,            # 🆕 Solo 1 posición (con banca pequeña)
+                 min_rr_ratio=1.5,               # Mínimo Risk/Reward 1:1.5
+                 liquidation_buffer=0.30,         # 30% buffer antes de liquidación
+                 max_position_size=0.40,          # Máximo 40% del capital por posición
+                 confidence_threshold=70):        # 🆕 Confianza mínima 70% (más conservador)
         
         self.initial_capital = initial_capital
         self.risk_per_trade = risk_per_trade
@@ -83,8 +81,7 @@ class RiskManager:
     
     def sync_with_kraken_balance(self, kraken_balance_usd):
         """
-        Sincroniza el capital con el balance real de Kraken
-        Llama esto periódicamente para mantener datos reales
+        🆕 Sincroniza el capital con el balance REAL de Kraken Margin Wallet
         """
         old_capital = self.current_capital
         self.current_capital = kraken_balance_usd
@@ -94,22 +91,27 @@ class RiskManager:
         print(f"   Capital Kraken: ${kraken_balance_usd:.2f}")
         print(f"   Diferencia: ${kraken_balance_usd - old_capital:+.2f}")
         
+        # Ajustar leverage dinámicamente según capital
+        if kraken_balance_usd < 20:
+            self.max_leverage = 3
+            print(f"   ⚠️ Leverage reducido a 3x (banca < $20)")
+        elif kraken_balance_usd < 50:
+            self.max_leverage = 5
+            print(f"   ℹ️ Leverage: 5x")
+        else:
+            self.max_leverage = 5
+            print(f"   ℹ️ Leverage: 5x")
+        
         self.save_config()
     
     def calculate_margin_requirements(self, entry_price, volume, leverage):
-        """
-        Calcula requerimientos de margen exactos de Kraken
-        
-        Kraken formula:
-        - Margin Required = Position Value / Leverage
-        - Maintenance Margin = Position Value / (Leverage * 2)
-        """
+        """Calcula requerimientos de margen exactos de Kraken"""
         position_value = entry_price * volume
         
         # Margen inicial requerido
         margin_required = position_value / leverage
         
-        # Margen de mantenimiento (Kraken usa leverage * 2)
+        # Margen de mantenimiento
         maintenance_margin = position_value / (leverage * 2)
         
         # Margen disponible
@@ -127,35 +129,23 @@ class RiskManager:
         }
     
     def calculate_liquidation_price(self, entry_price, stop_loss, leverage, side='buy'):
-        """
-        Calcula precio de liquidación según fórmula de Kraken
-        
-        Para posiciones con margen:
-        - LONG: Liquidación cuando equity = maintenance margin
-        - SHORT: Similar pero inverso
-        
-        Fórmula Kraken aproximada:
-        Liquidation Price = Entry * (1 ± (1 - Maintenance Margin Rate) / Leverage)
-        Donde Maintenance Margin Rate ≈ 1 / (Leverage * 2)
-        """
+        """Calcula precio de liquidación según fórmula de Kraken"""
         
         # Maintenance margin rate de Kraken
         maintenance_rate = 1 / (leverage * 2)
         
         if side == 'buy':
-            # Para LONG: precio baja hasta liquidación
             liquidation_price = entry_price * (1 - (1 - maintenance_rate))
             sl_distance_pct = ((entry_price - stop_loss) / entry_price) * 100
             liq_distance_pct = ((entry_price - liquidation_price) / entry_price) * 100
         else:
-            # Para SHORT: precio sube hasta liquidación
             liquidation_price = entry_price * (1 + (1 - maintenance_rate))
             sl_distance_pct = ((stop_loss - entry_price) / entry_price) * 100
             liq_distance_pct = ((liquidation_price - entry_price) / entry_price) * 100
         
         buffer = abs(liq_distance_pct - sl_distance_pct)
         
-        # Con 10x leverage, necesitamos al menos 25% de buffer
+        # Con banca pequeña, necesitamos al menos 30% de buffer
         safe = buffer >= (self.liquidation_buffer * 100)
         
         return {
@@ -169,8 +159,8 @@ class RiskManager:
     
     def calculate_position_size(self, entry_price, stop_loss, confidence, side='buy', use_leverage=True):
         """
-        Calcula tamaño de posición óptimo con leverage 10x
-        Más conservador debido al alto apalancamiento
+        🆕 OPTIMIZADO PARA BANCA PEQUEÑA (10€)
+        Calcula tamaño de posición seguro con leverage dinámico
         """
         
         result = {
@@ -184,15 +174,15 @@ class RiskManager:
             'reason': ''
         }
         
-        # 1. Verificar confianza mínima (subida a 65% con 10x)
+        # 1. Verificar confianza mínima (70% con banca pequeña)
         if confidence < self.confidence_threshold:
             result['reason'] = f"Confianza {confidence:.1f}% < {self.confidence_threshold}%"
             return result
         
-        # 2. Verificar máximo de posiciones
+        # 2. Verificar máximo de posiciones (solo 1 con banca pequeña)
         open_positions = self.get_open_positions_count()
         if open_positions >= self.max_open_positions:
-            result['reason'] = f"Máximo posiciones ({self.max_open_positions}) alcanzado"
+            result['reason'] = f"Máximo {self.max_open_positions} posición permitida"
             return result
         
         # 3. Calcular distancia al SL
@@ -205,17 +195,23 @@ class RiskManager:
             result['reason'] = "Stop loss inválido"
             return result
         
-        # 4. Determinar leverage (con 10x, usar dinámicamente según confianza)
+        # 4. Determinar leverage dinámicamente (más conservador con banca pequeña)
         if use_leverage and self.max_leverage > 1:
-            # Con confianza alta, usar más leverage
-            # Con 65% confianza = 5x, con 100% = 10x
-            confidence_factor = (confidence - 65) / 35  # 0 to 1
-            base_leverage = 5 + (confidence_factor * 5)  # 5x to 10x
-            leverage = min(round(base_leverage, 1), self.max_leverage)
+            # Con banca pequeña, usar leverage más conservador
+            if self.current_capital < 20:
+                # Con menos de $20, usar máximo 3x
+                confidence_factor = (confidence - 70) / 30  # 0 to 1
+                base_leverage = 2 + (confidence_factor * 1)  # 2x to 3x
+                leverage = min(round(base_leverage, 1), 3)
+            else:
+                # Con más de $20, hasta 5x
+                confidence_factor = (confidence - 70) / 30
+                base_leverage = 3 + (confidence_factor * 2)  # 3x to 5x
+                leverage = min(round(base_leverage, 1), self.max_leverage)
         else:
             leverage = 1
         
-        # 5. Calcular riesgo en USD (reducido con leverage alto)
+        # 5. Calcular riesgo en USD (2% de la banca)
         risk_usd = self.current_capital * self.risk_per_trade
         
         # 6. Calcular volumen inicial
@@ -244,7 +240,7 @@ class RiskManager:
         
         position_value = entry_price * volume
         
-        # 9. Verificar límite de posición (25% con 10x)
+        # 9. Verificar límite de posición (40% con banca pequeña)
         max_position_value = self.current_capital * self.max_position_size * leverage
         
         if position_value > max_position_value:
@@ -253,26 +249,37 @@ class RiskManager:
             margin_calc = self.calculate_margin_requirements(entry_price, volume, leverage)
             print(f"⚠️ Volumen ajustado por límite de posición ({self.max_position_size*100}%)")
         
-        # 10. Ajustar por confianza (más conservador)
-        confidence_multiplier = 0.6 + (confidence / 100) * 0.7  # 0.6 a 1.3x
+        # 10. Ajustar por confianza (más conservador con banca pequeña)
+        confidence_multiplier = 0.7 + (confidence / 100) * 0.5  # 0.7 a 1.2x
         volume *= confidence_multiplier
         position_value = volume * entry_price
         margin_calc = self.calculate_margin_requirements(entry_price, volume, leverage)
         
-        # 11. Validaciones finales
-        if volume < 0.001:
-            result['reason'] = "Volumen menor al mínimo (0.001 ADA)"
+        # 11. 🆕 VERIFICACIÓN ESPECIAL PARA BANCA PEQUEÑA
+        # Con menos de $20, asegurar que el tamaño mínimo sea razonable
+        if self.current_capital < 20:
+            min_position_value = 10  # Mínimo $10 de posición con leverage
+            if position_value < min_position_value:
+                volume = min_position_value / entry_price
+                position_value = volume * entry_price
+                margin_calc = self.calculate_margin_requirements(entry_price, volume, leverage)
+                print(f"⚠️ Volumen ajustado al mínimo razonable (${min_position_value})")
+        
+        # 12. Validaciones finales
+        if volume < 1:  # ADA tiene mínimo de 1
+            result['reason'] = "Volumen menor al mínimo (1 ADA)"
             return result
         
         if margin_calc['margin_required'] > margin_calc['margin_available']:
             result['reason'] = f"Margen insuficiente (req: ${margin_calc['margin_required']:.2f}, disp: ${margin_calc['margin_available']:.2f})"
             return result
         
-        if margin_calc['margin_after'] < self.current_capital * 0.15:  # Dejar 15% libre con 10x
-            result['reason'] = "Dejaría menos del 15% de margen disponible"
+        # Con banca pequeña, dejar al menos 20% libre
+        if margin_calc['margin_after'] < self.current_capital * 0.20:
+            result['reason'] = "Dejaría menos del 20% de margen disponible"
             return result
         
-        # 12. Recalcular liquidación final
+        # 13. Recalcular liquidación final
         liq_calc = self.calculate_liquidation_price(entry_price, stop_loss, leverage, side)
         
         if not liq_calc['safe']:
@@ -282,7 +289,7 @@ class RiskManager:
         # ✅ TODO OK
         result.update({
             'valid': True,
-            'volume': round(volume, 4),
+            'volume': round(volume, 0),  # Redondear a entero
             'risk_amount': risk_usd,
             'position_value': position_value,
             'leverage': leverage,
@@ -298,7 +305,7 @@ class RiskManager:
             'confidence_multiplier': confidence_multiplier,
             'exposure_multiplier': leverage,
             'buying_power_used': margin_calc['margin_required'],
-            'reason': 'Validado OK - Leverage 10x activo'
+            'reason': f'Validado OK - Leverage {leverage}x'
         })
         
         return result
@@ -374,7 +381,7 @@ class RiskManager:
         return {
             'current_capital': self.current_capital,
             'total_profit': self.total_profit,
-            'profit_%': ((self.current_capital - self.initial_capital) / self.initial_capital) * 100,
+            'profit_%': ((self.current_capital - self.initial_capital) / self.initial_capital) * 100 if self.initial_capital > 0 else 0,
             'total_trades': self.total_trades,
             'win_count': self.win_count,
             'win_rate': win_rate,
@@ -411,52 +418,50 @@ class RiskManager:
 
 # Función de utilidad
 def get_risk_manager():
-    """Retorna instancia del Risk Manager configurada para 10x leverage"""
+    """
+    🆕 OPTIMIZADO PARA BANCA PEQUEÑA (10€)
+    """
     return RiskManager(
-        initial_capital=1000,          # Tu capital en Kraken
-        risk_per_trade=0.015,          # 1.5% riesgo (reducido por leverage alto)
-        max_leverage=10,               # ⚡ 10X LEVERAGE ACTIVADO
-        margin_usage_limit=0.5,        # Usar máximo 50% del margen
-        max_open_positions=3,          # Máximo 3 posiciones
+        initial_capital=10,            # 🆕 Se sincroniza con Kraken automáticamente
+        risk_per_trade=0.02,           # 2% riesgo por trade (0.20€)
+        max_leverage=5,                # 🆕 5x max (seguro para banca pequeña)
+        margin_usage_limit=0.6,        # Usar máximo 60% del margen
+        max_open_positions=1,          # 🆕 Solo 1 posición a la vez
         min_rr_ratio=1.5,             # Mínimo R/R 1.5:1
-        liquidation_buffer=0.25,       # 25% buffer antes de liquidación
-        max_position_size=0.25,        # Máximo 25% por posición (reducido)
-        confidence_threshold=65        # Confianza mínima 65% (subido)
+        liquidation_buffer=0.30,       # 30% buffer antes de liquidación
+        max_position_size=0.40,        # Máximo 40% por posición
+        confidence_threshold=70        # Confianza mínima 70%
     )
 
 if __name__ == "__main__":
-    # Demo con 10x leverage
+    # Demo con 10€
     rm = get_risk_manager()
     rm.print_stats()
     
     print("\n" + "="*70)
-    print("  🔥 EJEMPLO: Trade con Leverage 10x")
+    print("  🔥 EJEMPLO: Trade con 10€ y Leverage 3x")
     print("="*70)
     
-    entry = 3500
-    tp = 3700
-    sl = 3400
-    confidence = 80
+    entry = 1.00
+    tp = 1.03
+    sl = 0.98
+    confidence = 75
     
     # Validar trade
     trade_valid = rm.validate_trade(entry, tp, sl, 'buy')
-    print(f"\n✔ Validación:")
+    print(f"\n✅ Validación:")
     print(f"  R/R: {trade_valid.get('rr_ratio', 0):.2f}")
     print(f"  Válido: {trade_valid['valid']}")
     
     if trade_valid['valid']:
-        # Con leverage 10x
+        # Con leverage
         position = rm.calculate_position_size(entry, sl, confidence, 'buy', use_leverage=True)
         
-        print(f"\n🔥 Posición CON Leverage 10x:")
+        print(f"\n🔥 Posición con Leverage {position.get('leverage', 0)}x:")
         print(f"  Volumen: {position['volume']} ADA")
         print(f"  Valor Posición: ${position['position_value']:.2f}")
-        print(f"  Leverage Usado: {position['leverage']}x")
         print(f"  Margen Requerido: ${position['margin_required']:.2f}")
-        print(f"  Margen Disponible: ${position['margin_available']:.2f}")
-        print(f"  Uso de Margen: {position.get('margin_usage_%', 0):.1f}%")
+        print(f"  Riesgo: ${position['risk_amount']:.2f} (2% de ${rm.current_capital:.2f})")
         print(f"  Precio Liquidación: ${position['liquidation_price']:.2f}")
-        print(f"  Buffer a Liquidación: {position.get('buffer_to_liquidation_%', 0):.1f}%")
-        print(f"  Riesgo Real: ${position['risk_amount']:.2f}")
-        print(f"  Poder de Compra Usado: ${position['buying_power_used']:.2f}")
+        print(f"  Buffer: {position.get('buffer_to_liquidation_%', 0):.1f}%")
         print(f"  Estado: {position['reason']}")
