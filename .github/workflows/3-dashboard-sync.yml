@@ -314,7 +314,7 @@ HTMLEOF
         if: always() && steps.check_files.outputs.has_files > 0
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           URL="https://winningtrendingbots.github.io/"
           
