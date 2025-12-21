@@ -26,6 +26,7 @@ jobs:
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "🧪 Ejecutando test de Telegram..."
           python test_telegram.py
