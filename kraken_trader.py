@@ -57,12 +57,125 @@ def kraken_request(uri_path, data):
     req = requests.post(KRAKEN_API_URL + uri_path, headers=headers, data=data)
     return req.json()
 
-def get_current_price():
+def get_current_price(retries=3, delay=2):
+    """
+    Obtiene precio actual de ADA-USD con retry logic
+    
+    Args:
+        retries: Número de reintentos
+        delay: Segundos entre reintentos
+    
+    Returns:
+        float: Precio actual o None si falla
+    """
     url = f"{KRAKEN_API_URL}/0/public/Ticker?pair=ADAUSD"
-    r = requests.get(url).json()
-    if 'result' in r and 'XADAZUSD' in r['result']:
-        return float(r['result']['XADAZUSD']['c'][0])
+    
+    for attempt in range(retries):
+        try:
+            print(f"🔍 Obteniendo precio (intento {attempt + 1}/{retries})...")
+            
+            # Hacer request con timeout
+            response = requests.get(url, timeout=10)
+            
+            # Verificar status code
+            if response.status_code != 200:
+                print(f"⚠️ Status code: {response.status_code}")
+                if attempt < retries - 1:
+                    time.sleep(delay)
+                    continue
+                return None
+            
+            # Parse JSON
+            data = response.json()
+            
+            # Verificar estructura
+            if 'error' in data and len(data['error']) > 0:
+                print(f"❌ Error API: {data['error']}")
+                if attempt < retries - 1:
+                    time.sleep(delay)
+                    continue
+                return None
+            
+            # Intentar múltiples formatos de par
+            pairs_to_try = ['ADAUSD', 'XADAZUSD', 'ADAEUR']
+            
+            if 'result' in data:
+                for pair in pairs_to_try:
+                    if pair in data['result']:
+                        price = float(data['result'][pair]['c'][0])
+                        print(f"✅ Precio obtenido: ${price:.2f} (par: {pair})")
+                        return price
+                
+                # Si no encontramos el precio
+                available = list(data['result'].keys())
+                print(f"⚠️ Pares disponibles: {available}")
+            
+            print(f"❌ No se encontró precio en la respuesta")
+            if attempt < retries - 1:
+                time.sleep(delay)
+                continue
+            
+            return None
+            
+        except requests.exceptions.Timeout:
+            print(f"⏱️ Timeout en intento {attempt + 1}")
+            if attempt < retries - 1:
+                time.sleep(delay)
+                continue
+            return None
+            
+        except requests.exceptions.RequestException as e:
+            print(f"🌐 Error de red: {e}")
+            if attempt < retries - 1:
+                time.sleep(delay)
+                continue
+            return None
+            
+        except (KeyError, ValueError, IndexError) as e:
+            print(f"📊 Error parseando respuesta: {e}")
+            if attempt < retries - 1:
+                time.sleep(delay)
+                continue
+            return None
+        
+        except Exception as e:
+            print(f"❌ Error inesperado: {e}")
+            if attempt < retries - 1:
+                time.sleep(delay)
+                continue
+            return None
+    
+    print(f"❌ Todos los intentos fallaron después de {retries} reintentos")
     return None
+
+
+def get_current_price_with_backup():
+    """
+    Intenta Kraken primero, si falla usa yfinance como backup
+    """
+    # Intento 1: Kraken API
+    current_price = get_current_price_with_backup()
+    if price is not None:
+        return price
+    
+    # Intento 2: yfinance como backup
+    print("🔄 Intentando con yfinance como backup...")
+    try:
+        import yfinance as yf
+        ticker = yf.Ticker("ADA-USD")
+        data = ticker.history(period="1d", interval="1m")
+        
+        if len(data) > 0:
+            price = data['Close'].iloc[-1]
+            print(f"✅ Precio obtenido via yfinance: ${price:.2f}")
+            return float(price)
+        else:
+            print("❌ yfinance no retornó datos")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error con yfinance: {e}")
+        return None
 
 def get_balance():
     """Obtiene balance real de Kraken"""
@@ -141,7 +254,7 @@ def monitor_orders():
         print("ℹ️ No hay órdenes abiertas para monitorear")
         return
     
-    current_price = get_current_price()
+    current_price = get_current_price_with_backup()
     if not current_price:
         print("❌ No se pudo obtener precio actual")
         return
