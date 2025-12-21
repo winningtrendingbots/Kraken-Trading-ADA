@@ -78,7 +78,7 @@ jobs:
         if: steps.analyze.outputs.needs_recovery == 'true'
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
             -d chat_id="${TELEGRAM_CHAT_ID}" \
@@ -307,7 +307,7 @@ jobs:
       - name: Send recovery status
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           status="unknown"
           
