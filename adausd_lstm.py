@@ -101,7 +101,7 @@ class ForexDataset(Dataset):
         return self.X[idx], self.y[idx]
 
 
-class MultiOutputLSTM_L1(nn.Module):
+class MultiOutputLSTM(nn.Module):
     """Versión con BatchNorm - cambio mínimo respecto a tu código"""
     def __init__(self, input_size=4, hidden_size=192, num_layers=2,
                  output_size=3, dropout=0.35):
