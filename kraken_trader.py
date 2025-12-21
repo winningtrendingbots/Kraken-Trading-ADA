@@ -17,7 +17,7 @@ KRAKEN_API_URL = "https://api.kraken.com"
 
 # Telegram
 TELEGRAM_API = os.environ.get('TELEGRAM_API', '')
-CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+CHAT_ID = os.environ.get('CHAT_ID', '')
 
 # Archivos
 TRADES_FILE = 'kraken_trades.csv'
