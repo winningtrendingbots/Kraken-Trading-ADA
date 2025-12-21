@@ -1,1 +1,4 @@
 tengo que corregir más cosas ... por algún motivo el bot no funciona ... hay que añadir a todo esto: CHAT_ID: ${{ secrets.CHAT_ID }}  y más cambios
+este es el último chat
+https://claude.ai/chat/091d08f5-b5b5-4291-a06e-ead5ff6663a8
+con la cuenta jsgastoniriartecabrera@gmail.com
