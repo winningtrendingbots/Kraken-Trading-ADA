@@ -9,7 +9,7 @@ import time
 
 # Credenciales
 TELEGRAM_API = os.environ.get('TELEGRAM_API', '')
-CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+CHAT_ID = os.environ.get('CHAT_ID', '')
 
 print("="*70)
 print("  📱 TEST DE TELEGRAM")
