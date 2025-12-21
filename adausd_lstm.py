@@ -456,14 +456,14 @@ if __name__ == "__main__":
 
         # CONFIGURACIÓN
         INTERVAL = '1h'
-        SEQ_LEN = 90           # ⬆️ De 60 → 90 (50% más contexto)
-        HIDDEN = 192           # ⬇️ De 256 → 192 (25% reducción)
-        LAYERS = 2             # ⬇️ De 3 → 2 (1 capa menos)
-        DROPOUT = 0.35         # ⬆️ De 0.2 → 0.35 (75% más dropout)
-        BATCH = 256            # ⬆️ De 128 → 256 (batches más grandes)
-        EPOCHS = 120           # ⬇️ De 150 → 120 (20% menos épocas)
-        LR = 0.0008            # ⬇️ De 0.001 → 0.0008 (20% más lento)
-        PATIENCE = 15          # ⬇️ De 20 → 15 (para antes)
+        SEQ_LEN = 60
+        HIDDEN = 128
+        LAYERS = 2
+        DROPOUT = 0.4
+        BATCH = 128
+        EPOCHS = 150
+        LR = 0.001
+        PATIENCE = 15
 
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"🖥️ Device: {device}\n")
@@ -471,42 +471,160 @@ if __name__ == "__main__":
         # 1. Descargar
         df = download_adausd(interval='1h', path='ADAUSD_1h_data.csv')
     
-        # ✅ NUEVO: Preparar datos correctamente
+        # 2. Preparar datos
         (X_train, y_train), (X_val, y_val), (X_test, y_test), scaler_in, scaler_out = \
             prepare_data_CORRECTED(df, seq_len=60, train_size=0.75, val_size=0.15)
         
-        # ✅ YA NO NECESITAS train_test_split después (ya está dividido)
-        # ELIMINA ESTAS LÍNEAS:
-        # X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.1, shuffle=False)
-        # X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.15, shuffle=False)
-        
-        # 4. Loaders (sin cambios)
+        # 3. Loaders
         train_loader = DataLoader(ForexDataset(X_train, y_train), BATCH, shuffle=True)
         val_loader = DataLoader(ForexDataset(X_val, y_val), BATCH, shuffle=False)
         test_loader = DataLoader(ForexDataset(X_test, y_test), BATCH, shuffle=False)
 
-        # 5. Modelo
+        # 4. Modelo
         model = MultiOutputLSTM(4, HIDDEN, LAYERS, 3, DROPOUT)
         params = sum(p.numel() for p in model.parameters())
         print(f"🧠 Modelo: {params:,} parámetros\n")
 
-        # 6. Entrenar
+        # 5. Entrenar
         start = time.time()
         train_l, val_l, lrs = train_model(model, train_loader, val_loader, EPOCHS, LR, device, PATIENCE)
 
-        # 7. Evaluar
-        preds, acts, metrics, pred_d, act_d = evaluate(model, test_loader, scaler_out, device)
+        # ============================================================================
+        # 🔍 PEGA AQUÍ EL CÓDIGO DE DIAGNÓSTICO (REEMPLAZA LA LÍNEA 6 ORIGINAL)
+        # ============================================================================
+        
+        # ❌ ELIMINA ESTA LÍNEA ORIGINAL:
+        # preds, acts, metrics, pred_d, act_d = evaluate(model, test_loader, scaler_out, device)
+        
+        # ✅ REEMPLÁZALA CON ESTO:
+        
+        print("\n" + "="*70)
+        print("  📊 EVALUACIÓN COMPLETA (Train/Val/Test)")
+        print("="*70 + "\n")
+        
+        # 6a. Evaluar en TRAIN
+        print("🔄 Evaluando en Train...")
+        train_loader_eval = DataLoader(ForexDataset(X_train, y_train), 
+                                       BATCH, shuffle=False)
+        _, _, metrics_train, pred_train, act_train = evaluate(
+            model, train_loader_eval, scaler_out, device
+        )
+        
+        # 6b. Evaluar en VAL
+        print("🔄 Evaluando en Val...")
+        _, _, metrics_val, pred_val, act_val = evaluate(
+            model, val_loader, scaler_out, device
+        )
+        
+        # 6c. Evaluar en TEST
+        print("🔄 Evaluando en Test...")
+        preds, acts, metrics_test, pred_d, act_d = evaluate(
+            model, test_loader, scaler_out, device
+        )
+        
+        # ============================================================================
+        # 🔍 DIAGNÓSTICO DE OVERFITTING
+        # ============================================================================
+        
+        print("\n" + "="*70)
+        print("  🔬 DIAGNÓSTICO DE OVERFITTING")
+        print("="*70 + "\n")
+        
+        # Extraer R² de cada conjunto
+        r2_train_h = metrics_train['High']['R2']
+        r2_train_l = metrics_train['Low']['R2']
+        r2_train_c = metrics_train['Close']['R2']
+        
+        r2_val_h = metrics_val['High']['R2']
+        r2_val_l = metrics_val['Low']['R2']
+        r2_val_c = metrics_val['Close']['R2']
+        
+        r2_test_h = metrics_test['High']['R2']
+        r2_test_l = metrics_test['Low']['R2']
+        r2_test_c = metrics_test['Close']['R2']
+        
+        # Calcular gaps
+        gap_train_val_c = abs(r2_train_c - r2_val_c)
+        gap_train_test_c = abs(r2_train_c - r2_test_c)
+        gap_val_test_c = abs(r2_val_c - r2_test_c)
+        
+        # MOSTRAR TABLA COMPARATIVA
+        print("📊 R² SCORES COMPLETOS:\n")
+        print("┌─────────┬────────┬────────┬────────┐")
+        print("│         │  High  │  Low   │ Close  │")
+        print("├─────────┼────────┼────────┼────────┤")
+        print(f"│ Train   │ {r2_train_h:.4f} │ {r2_train_l:.4f} │ {r2_train_c:.4f} │")
+        print(f"│ Val     │ {r2_val_h:.4f} │ {r2_val_l:.4f} │ {r2_val_c:.4f} │")
+        print(f"│ Test    │ {r2_test_h:.4f} │ {r2_test_l:.4f} │ {r2_test_c:.4f} │")
+        print("└─────────┴────────┴────────┴────────┘\n")
+        
+        # ANÁLISIS DE GAPS (enfocado en Close)
+        print("🎯 ANÁLISIS DE GAPS (Close):\n")
+        print(f"   Train vs Val:  {gap_train_val_c:.4f}")
+        print(f"   Train vs Test: {gap_train_test_c:.4f}")
+        print(f"   Val vs Test:   {gap_val_test_c:.4f}\n")
+        
+        # VEREDICTO
+        print("🔬 VEREDICTO:\n")
+        
+        if gap_train_test_c < 0.03:
+            status = "✅ EXCELENTE"
+            mensaje = "Sin overfitting significativo. Modelo bien regularizado."
+            color = "verde"
+        elif gap_train_test_c < 0.05:
+            status = "✅ BUENO"
+            mensaje = "Overfitting mínimo aceptable para trading."
+            color = "verde"
+        elif gap_train_test_c < 0.08:
+            status = "⚠️  MODERADO"
+            mensaje = "Overfitting presente. Considera usar NIVEL 2 de regularización."
+            color = "amarillo"
+        elif gap_train_test_c < 0.12:
+            status = "⚠️  ALTO"
+            mensaje = "Overfitting significativo. Usa NIVEL 3 de regularización."
+            color = "naranja"
+        else:
+            status = "🚨 SEVERO"
+            mensaje = "Overfitting crítico. El modelo NO servirá en producción."
+            color = "rojo"
+        
+        print(f"   Status: {status}")
+        print(f"   {mensaje}\n")
+        
+        # RECOMENDACIÓN ESPECÍFICA
+        print("💡 RECOMENDACIÓN:\n")
+        
+        if gap_train_test_c >= 0.12:
+            print("   🔴 Cambia a configuración NIVEL 3:")
+            print("      HIDDEN=64, LAYERS=1, DROPOUT=0.5, SEQ_LEN=120")
+        elif gap_train_test_c >= 0.08:
+            print("   🟡 Cambia a configuración NIVEL 2:")
+            print("      HIDDEN=128, LAYERS=2, DROPOUT=0.45, SEQ_LEN=120")
+        elif gap_train_test_c >= 0.05:
+            print("   🟢 Prueba configuración NIVEL 1:")
+            print("      HIDDEN=192, LAYERS=2, DROPOUT=0.35, SEQ_LEN=90")
+        else:
+            print("   🎉 ¡Configuración actual es buena! No cambies nada.")
+        
+        print("\n" + "="*70 + "\n")
+        
+        # ============================================================================
+        # FIN DEL CÓDIGO DE DIAGNÓSTICO
+        # ============================================================================
 
-        # 8. Graficar CON MÉTRICAS
-        plot_results(train_l, val_l, lrs, pred_d, act_d, metrics, 'adausd_results.png')
+        # 7. Graficar (AHORA con métricas correctas)
+        # ⚠️ IMPORTANTE: plot_results necesita las métricas de TEST, no de train
+        plot_results(train_l, val_l, lrs, pred_d, act_d, metrics_test, 'adausd_results.png')
 
-        # 9. Guardar
+        # 8. Guardar
         model_dir = 'ADAUSD_MODELS'
         os.makedirs(model_dir, exist_ok=True)
 
         torch.save({
             'model_state_dict': model.state_dict(),
-            'metrics': metrics,
+            'metrics_train': metrics_train,  # ✅ Ahora guardamos TODAS las métricas
+            'metrics_val': metrics_val,
+            'metrics_test': metrics_test,
             'config': {'seq_len': SEQ_LEN, 'hidden': HIDDEN, 'layers': LAYERS}
         }, f'{model_dir}/adausd_lstm_{INTERVAL}.pth')
 
@@ -517,46 +635,78 @@ if __name__ == "__main__":
             json.dump({
                 'interval': INTERVAL,
                 'seq_len': SEQ_LEN,
-                'metrics': {k: {mk: float(mv) for mk, mv in v.items()}
-                            for k, v in metrics.items()}
+                'metrics_train': {k: {mk: float(mv) for mk, mv in v.items()}
+                                 for k, v in metrics_train.items()},
+                'metrics_val': {k: {mk: float(mv) for mk, mv in v.items()}
+                               for k, v in metrics_val.items()},
+                'metrics_test': {k: {mk: float(mv) for mk, mv in v.items()}
+                                for k, v in metrics_test.items()}
             }, f, indent=2)
 
         total_time = time.time() - start
         
-        # Mensaje mejorado para Telegram
+        # Mensaje mejorado para Telegram con diagnóstico
         msg = f"""✅ *Entrenamiento Completado*
 
 ⏱️ Tiempo: {total_time/60:.1f} min
 🧠 Parámetros: {params:,}
 
-📊 *Métricas Test:*
+🔬 *Diagnóstico Overfitting:*
+  • Gap Train-Test: {gap_train_test_c:.4f}
+  • Status: {status}
+
+📊 *R² Scores (Close):*
+  • Train: {r2_train_c:.4f}
+  • Val:   {r2_val_c:.4f}
+  • Test:  {r2_test_c:.4f}
+
+📈 *Métricas Test:*
 High:
-  • MAE: ${metrics['High']['MAE']:.2f}
-  • R²: {metrics['High']['R2']:.4f}
-  • MAPE: {metrics['High']['MAPE']:.2f}%
+  • MAE: ${metrics_test['High']['MAE']:.2f}
+  • R²: {metrics_test['High']['R2']:.4f}
+  • MAPE: {metrics_test['High']['MAPE']:.2f}%
 
 Low:
-  • MAE: ${metrics['Low']['MAE']:.2f}
-  • R²: {metrics['Low']['R2']:.4f}
-  • MAPE: {metrics['Low']['MAPE']:.2f}%
+  • MAE: ${metrics_test['Low']['MAE']:.2f}
+  • R²: {metrics_test['Low']['R2']:.4f}
+  • MAPE: {metrics_test['Low']['MAPE']:.2f}%
 
 Close:
-  • MAE: ${metrics['Close']['MAE']:.2f}
-  • R²: {metrics['Close']['R2']:.4f}
-  • MAPE: {metrics['Close']['MAPE']:.2f}%
+  • MAE: ${metrics_test['Close']['MAE']:.2f}
+  • R²: {metrics_test['Close']['R2']:.4f}
+  • MAPE: {metrics_test['Close']['MAPE']:.2f}%
 """
 
-        # ✅ NUEVO: Guardar timestamp y métricas para forzar commit
+        # Guardar summary con diagnóstico
         training_summary = {
             'timestamp': datetime.now().isoformat(),
             'training_completed': True,
             'total_time_minutes': round(total_time / 60, 2),
             'epochs_completed': len(train_l),
             'best_val_loss': float(min(val_l)),
+            'overfitting_diagnosis': {
+                'gap_train_test': float(gap_train_test_c),
+                'status': status,
+                'r2_train': float(r2_train_c),
+                'r2_val': float(r2_val_c),
+                'r2_test': float(r2_test_c)
+            },
             'final_metrics': {
-                'high': {k: float(v) for k, v in metrics['High'].items()},
-                'low': {k: float(v) for k, v in metrics['Low'].items()},
-                'close': {k: float(v) for k, v in metrics['Close'].items()}
+                'train': {
+                    'high': {k: float(v) for k, v in metrics_train['High'].items()},
+                    'low': {k: float(v) for k, v in metrics_train['Low'].items()},
+                    'close': {k: float(v) for k, v in metrics_train['Close'].items()}
+                },
+                'val': {
+                    'high': {k: float(v) for k, v in metrics_val['High'].items()},
+                    'low': {k: float(v) for k, v in metrics_val['Low'].items()},
+                    'close': {k: float(v) for k, v in metrics_val['Close'].items()}
+                },
+                'test': {
+                    'high': {k: float(v) for k, v in metrics_test['High'].items()},
+                    'low': {k: float(v) for k, v in metrics_test['Low'].items()},
+                    'close': {k: float(v) for k, v in metrics_test['Close'].items()}
+                }
             },
             'model_config': {
                 'hidden_size': HIDDEN,
@@ -570,16 +720,14 @@ Close:
         with open(f'{model_dir}/training_summary.json', 'w') as f:
             json.dump(training_summary, f, indent=2)
         
-        # Crear archivo de timestamp que siempre cambia
         with open('LAST_TRAINING.txt', 'w') as f:
             f.write(f"Last training: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
             f.write(f"Best Val Loss: {min(val_l):.8f}\n")
+            f.write(f"Gap Train-Test: {gap_train_test_c:.4f} ({status})\n")
             f.write(f"Total time: {total_time/60:.1f} minutes\n")
         
         print(f"✅ Training summary guardado: {model_dir}/training_summary.json")
         print(f"✅ Timestamp guardado: LAST_TRAINING.txt")
-        
-        send_telegram_message(msg)
         
         print("\n" + "="*70)
         print("✅✅✅  COMPLETADO  ✅✅✅")
