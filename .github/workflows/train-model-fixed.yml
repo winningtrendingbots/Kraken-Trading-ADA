@@ -37,7 +37,7 @@ jobs:
       - name: 🧠 Entrenar modelo
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "🔧 Iniciando entrenamiento..."
           python adausd_lstm.py
@@ -200,7 +200,7 @@ jobs:
         if: always()
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           if [ "${{ steps.check_files.outputs.files_ok }}" == "true" ] && [ "${{ job.status }}" == "success" ]; then
             STATUS="✅ ÉXITO"
