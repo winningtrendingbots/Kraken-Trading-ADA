@@ -1,0 +1,110 @@
+name: 🔍 Check Repo Status
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🔍 Diagnóstico Completo
+        run: |
+          echo "="*70
+          echo "  🔍 DIAGNÓSTICO DEL REPOSITORIO"
+          echo "="*70
+          echo ""
+          
+          echo "📊 ESTADO DE GIT:"
+          echo "─"*70
+          git status
+          echo ""
+          
+          echo "📜 ÚLTIMOS 5 COMMITS:"
+          echo "─"*70
+          git log --oneline -5
+          echo ""
+          
+          echo "🌿 BRANCHES:"
+          echo "─"*70
+          git branch -a
+          echo ""
+          
+          echo "📂 ARCHIVOS CRÍTICOS:"
+          echo "─"*70
+          
+          if [ -d "ADAUSD_MODELS" ]; then
+            echo "✅ ADAUSD_MODELS/ existe"
+            ls -lh ADAUSD_MODELS/ | head -10
+          else
+            echo "❌ ADAUSD_MODELS/ NO existe"
+          fi
+          
+          echo ""
+          
+          if [ -f "ADAUSD_1h_data.csv" ]; then
+            echo "✅ ADAUSD_1h_data.csv existe ($(wc -l < ADAUSD_1h_data.csv) líneas)"
+          else
+            echo "❌ ADAUSD_1h_data.csv NO existe"
+          fi
+          
+          echo ""
+          
+          if [ -f "adausd_results.png" ]; then
+            echo "✅ adausd_results.png existe ($(du -h adausd_results.png | cut -f1))"
+          else
+            echo "⚠️ adausd_results.png NO existe"
+          fi
+          
+          echo ""
+          echo "🔄 DIFERENCIAS CON REMOTO:"
+          echo "─"*70
+          
+          LOCAL=$(git rev-parse HEAD)
+          REMOTE=$(git rev-parse origin/main)
+          
+          if [ "$LOCAL" == "$REMOTE" ]; then
+            echo "✅ Local y remoto sincronizados"
+          else
+            echo "⚠️ Local y remoto DIVERGEN"
+            echo "   Local:  $LOCAL"
+            echo "   Remote: $REMOTE"
+            echo ""
+            echo "Diferencias:"
+            git log --oneline HEAD..origin/main
+          fi
+          
+          echo ""
+          echo "📋 ARCHIVOS MODIFICADOS (si hay):"
+          echo "─"*70
+          
+          if git diff --name-only | grep -q .; then
+            echo "⚠️ Archivos modificados:"
+            git diff --name-only
+          else
+            echo "✅ No hay archivos modificados"
+          fi
+          
+          echo ""
+          echo "📦 ARCHIVOS SIN RASTREAR (si hay):"
+          echo "─"*70
+          
+          if git ls-files --others --exclude-standard | grep -q .; then
+            echo "⚠️ Archivos sin rastrear:"
+            git ls-files --others --exclude-standard
+          else
+            echo "✅ No hay archivos sin rastrear"
+          fi
+          
+          echo ""
+          echo "="*70
+          echo "  ✅ DIAGNÓSTICO COMPLETADO"
+          echo "="*70
