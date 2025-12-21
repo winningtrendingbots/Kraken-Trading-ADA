@@ -95,7 +95,7 @@ jobs:
       - name: 🧠 Entrenar modelo LSTM
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "🔧 Iniciando entrenamiento..."
           python adausd_lstm.py
@@ -313,7 +313,7 @@ Files updated: $FILES_CHANGED
         if: steps.check_order.outputs.skip_trading != 'true'
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "🔮 Generando predicción con datos de 1 hora..."
           python predict_and_filter.py
@@ -322,7 +322,7 @@ Files updated: $FILES_CHANGED
         if: steps.check_order.outputs.skip_trading != 'true'
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
           KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
         run: |
@@ -379,7 +379,7 @@ Files updated: $FILES_CHANGED
       - name: 🔍 Monitorear órdenes cada 15 min
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
           KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
         run: |
@@ -433,7 +433,7 @@ Files updated: $FILES_CHANGED
       - name: 📱 Enviar resumen
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           STATUS="✅"
           
