@@ -455,6 +455,7 @@ if __name__ == "__main__":
         print("="*70 + "\n")
 
         # CONFIGURACIÓN
+        """ había posibles problemas de sobreajusto con los errores
         INTERVAL = '1h'
         SEQ_LEN = 60
         HIDDEN = 128
@@ -464,6 +465,16 @@ if __name__ == "__main__":
         EPOCHS = 150
         LR = 0.001
         PATIENCE = 15
+        INTERVAL = '1h'
+        """
+        SEQ_LEN = 90       # 🔼 Más contexto histórico (3.75 días)
+        HIDDEN = 96        # 🔽 Reducir complejidad
+        LAYERS = 2         # ✅ Mantener
+        DROPOUT = 0.45     # 🔼 Más regularización
+        BATCH = 128        # ✅ Mantener
+        EPOCHS = 200       # 🔼 Más tiempo con patience
+        LR = 0.0008        # 🔽 Learning rate más bajo
+        PATIENCE = 20      # 🔼 Más paciencia
 
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"🖥️ Device: {device}\n")
