@@ -25,11 +25,6 @@ OPEN_ORDERS_FILE = 'open_orders.json'
 
 # 🔥 MODO DE OPERACIÓN
 LIVE_TRADING = True  # ⚠️ Cambiar a True para trading real
-# ⚠️ IMPORTANTE: Solo activar LIVE_TRADING cuando:
-#    1. Hayas verificado que todo funciona en simulación
-#    2. Tengas fondos suficientes en Kraken
-#    3. Hayas configurado correctamente las API keys
-#    4. Entiendas los riesgos del trading con leverage
 
 def send_telegram(msg):
     if not TELEGRAM_API or not CHAT_ID:
@@ -57,27 +52,78 @@ def kraken_request(uri_path, data):
     req = requests.post(KRAKEN_API_URL + uri_path, headers=headers, data=data)
     return req.json()
 
+def detect_ada_pair():
+    """
+    🔍 Detecta el par correcto de ADA en Kraken
+    
+    Kraken usa diferentes formatos:
+    - ADAUSD, XADAZUSD, ADAEUR, etc.
+    
+    Esta función detecta cuál está disponible
+    """
+    print("\n🔍 DETECTANDO PAR CORRECTO DE ADA...")
+    
+    # Posibles pares que Kraken usa para ADA
+    possible_pairs = [
+        'ADAUSD',      # Formato simple
+        'XADAZUSD',    # Formato extendido
+        'ADAUSDT',     # Tether
+        'ADAEUR',      # Euro
+        'ADAGBP'       # Libra
+    ]
+    
+    try:
+        url = f"{KRAKEN_API_URL}/0/public/AssetPairs"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            if 'result' in data:
+                available_pairs = data['result'].keys()
+                
+                # Buscar pares ADA
+                ada_pairs = [p for p in available_pairs if 'ADA' in p.upper()]
+                
+                print(f"✅ Pares ADA disponibles: {ada_pairs}")
+                
+                # Intentar encontrar USD primero
+                for pair in possible_pairs:
+                    if pair in ada_pairs:
+                        print(f"✅ Par detectado: {pair}")
+                        return pair
+                
+                # Si no encontramos ninguno de los esperados, usar el primero disponible
+                if ada_pairs:
+                    print(f"⚠️ Usando primer par disponible: {ada_pairs[0]}")
+                    return ada_pairs[0]
+        
+        print("❌ No se pudo detectar par ADA")
+        return None
+        
+    except Exception as e:
+        print(f"❌ Error detectando par: {e}")
+        return None
+
 def get_current_price(retries=3, delay=2):
     """
-    Obtiene precio actual de ADA-USD con retry logic
-    
-    Args:
-        retries: Número de reintentos
-        delay: Segundos entre reintentos
-    
-    Returns:
-        float: Precio actual o None si falla
+    Obtiene precio actual de ADA con detección automática del par
     """
-    url = f"{KRAKEN_API_URL}/0/public/Ticker?pair=ADAUSD"
+    # 🆕 Detectar par correcto
+    pair = detect_ada_pair()
+    
+    if not pair:
+        print("❌ No se pudo detectar par de trading")
+        return None
+    
+    url = f"{KRAKEN_API_URL}/0/public/Ticker?pair={pair}"
     
     for attempt in range(retries):
         try:
-            print(f"🔍 Obteniendo precio (intento {attempt + 1}/{retries})...")
+            print(f"📊 Obteniendo precio de {pair} (intento {attempt + 1}/{retries})...")
             
-            # Hacer request con timeout
             response = requests.get(url, timeout=10)
             
-            # Verificar status code
             if response.status_code != 200:
                 print(f"⚠️ Status code: {response.status_code}")
                 if attempt < retries - 1:
@@ -85,10 +131,8 @@ def get_current_price(retries=3, delay=2):
                     continue
                 return None
             
-            # Parse JSON
             data = response.json()
             
-            # Verificar estructura
             if 'error' in data and len(data['error']) > 0:
                 print(f"❌ Error API: {data['error']}")
                 if attempt < retries - 1:
@@ -96,19 +140,12 @@ def get_current_price(retries=3, delay=2):
                     continue
                 return None
             
-            # Intentar múltiples formatos de par
-            pairs_to_try = ['ADAUSD', 'XADAZUSD', 'ADAEUR']
-            
             if 'result' in data:
-                for pair in pairs_to_try:
-                    if pair in data['result']:
-                        price = float(data['result'][pair]['c'][0])
-                        print(f"✅ Precio obtenido: ${price:.2f} (par: {pair})")
-                        return price
-                
-                # Si no encontramos el precio
-                available = list(data['result'].keys())
-                print(f"⚠️ Pares disponibles: {available}")
+                # Kraken devuelve el par en el formato que usa internamente
+                result_pair = list(data['result'].keys())[0]
+                price = float(data['result'][result_pair]['c'][0])
+                print(f"✅ Precio obtenido: ${price:.4f} (par: {result_pair})")
+                return price
             
             print(f"❌ No se encontró precio en la respuesta")
             if attempt < retries - 1:
@@ -117,65 +154,14 @@ def get_current_price(retries=3, delay=2):
             
             return None
             
-        except requests.exceptions.Timeout:
-            print(f"⏱️ Timeout en intento {attempt + 1}")
-            if attempt < retries - 1:
-                time.sleep(delay)
-                continue
-            return None
-            
-        except requests.exceptions.RequestException as e:
-            print(f"🌐 Error de red: {e}")
-            if attempt < retries - 1:
-                time.sleep(delay)
-                continue
-            return None
-            
-        except (KeyError, ValueError, IndexError) as e:
-            print(f"📊 Error parseando respuesta: {e}")
-            if attempt < retries - 1:
-                time.sleep(delay)
-                continue
-            return None
-        
         except Exception as e:
-            print(f"❌ Error inesperado: {e}")
+            print(f"❌ Error: {e}")
             if attempt < retries - 1:
                 time.sleep(delay)
                 continue
             return None
     
-    print(f"❌ Todos los intentos fallaron después de {retries} reintentos")
     return None
-
-
-def get_current_price_with_backup():
-    """
-    Intenta Kraken primero, si falla usa yfinance como backup
-    """
-    # Intento 1: Kraken API
-    current_price = get_current_price_with_backup()
-    if price is not None:
-        return price
-    
-    # Intento 2: yfinance como backup
-    print("🔄 Intentando con yfinance como backup...")
-    try:
-        import yfinance as yf
-        ticker = yf.Ticker("ADA-USD")
-        data = ticker.history(period="1d", interval="1m")
-        
-        if len(data) > 0:
-            price = data['Close'].iloc[-1]
-            print(f"✅ Precio obtenido via yfinance: ${price:.2f}")
-            return float(price)
-        else:
-            print("❌ yfinance no retornó datos")
-            return None
-            
-    except Exception as e:
-        print(f"❌ Error con yfinance: {e}")
-        return None
 
 def get_balance():
     """Obtiene balance real de Kraken"""
@@ -184,31 +170,53 @@ def get_balance():
     return result
 
 def get_usd_balance():
-    """Obtiene balance en USD disponible"""
+    """
+    🆕 Obtiene balance en USD disponible (mejorado)
+    Maneja múltiples formatos de Kraken
+    """
     balance = get_balance()
-    if 'result' in balance and 'ZUSD' in balance['result']:
-        return float(balance['result']['ZUSD'])
+    
+    if 'result' in balance:
+        # Kraken puede usar diferentes símbolos para USD
+        usd_symbols = ['ZUSD', 'USD', 'USDT']
+        
+        for symbol in usd_symbols:
+            if symbol in balance['result']:
+                usd = float(balance['result'][symbol])
+                print(f"💰 Balance {symbol}: ${usd:.2f}")
+                return usd
+        
+        print("⚠️ No se encontró balance USD")
+        print(f"Balances disponibles: {list(balance['result'].keys())}")
+    
     return 0
 
 def place_order(side, volume, price, tp_price, sl_price):
     """
-    side: 'buy' o 'sell'
-    volume: cantidad en ADA
-    price: precio límite (None para market order)
-    tp_price: take profit
-    sl_price: stop loss
+    🆕 Coloca orden con par correcto detectado automáticamente
     """
+    pair = detect_ada_pair()
+    
+    if not pair:
+        return {'error': ['No se pudo detectar par de trading']}
+    
     data = {
         'nonce': str(int(1000*time.time())),
         'ordertype': 'limit' if price else 'market',
         'type': side,
         'volume': str(volume),
-        'pair': 'XADAZUSD',
-        'leverage': '10'  # 🔥 LEVERAGE 10X
+        'pair': pair,  # 🔥 Usar par detectado
+        'leverage': '10'
     }
     
     if price:
         data['price'] = str(price)
+    
+    print(f"📤 Enviando orden a Kraken:")
+    print(f"   Par: {pair}")
+    print(f"   Tipo: {side}")
+    print(f"   Volumen: {volume}")
+    print(f"   Leverage: 10x")
     
     result = kraken_request('/0/private/AddOrder', data)
     return result
@@ -239,7 +247,7 @@ def calculate_tp_sl(entry_price, side, atr, pred_high, pred_low, tp_percentage=0
         tp = entry_price - (target_move * tp_percentage)
         sl = entry_price + (atr * 2)
     
-    return round(tp, 2), round(sl, 2)
+    return round(tp, 4), round(sl, 4)
 
 def monitor_orders():
     """Monitorea órdenes abiertas y cierra por TP/SL/tiempo - CADA 15 MINUTOS"""
@@ -254,7 +262,7 @@ def monitor_orders():
         print("ℹ️ No hay órdenes abiertas para monitorear")
         return
     
-    current_price = get_current_price_with_backup()
+    current_price = get_current_price()
     if not current_price:
         print("❌ No se pudo obtener precio actual")
         return
@@ -312,8 +320,8 @@ def monitor_orders():
         if should_close:
             print(f"🔴 Cerrando orden {txid[:8]}... por {close_reason}")
             print(f"   Tiempo abierto: {time_open:.1f} min")
-            print(f"   Precio entrada: ${entry_price:.2f}")
-            print(f"   Precio cierre: ${close_price:.2f}")
+            print(f"   Precio entrada: ${entry_price:.4f}")
+            print(f"   Precio cierre: ${close_price:.4f}")
             
             # 🔥 CERRAR EN KRAKEN SI LIVE_TRADING
             if LIVE_TRADING:
@@ -366,8 +374,8 @@ def monitor_orders():
 
 📖 ID: {txid[:8]}...
 📊 Tipo: {side.upper()}
-💰 Entrada: ${entry_price:.2f}
-💰 Salida: ${close_price:.2f}
+💰 Entrada: ${entry_price:.4f}
+💰 Salida: ${close_price:.4f}
 🎯 Razón: {close_reason}
 ⏱️ Tiempo: {time_open:.1f} min
 
@@ -407,7 +415,7 @@ def execute_signal():
     signal = latest['signal']
     
     if signal == 'HOLD':
-        print("⸮️ Señal HOLD - No hay acción")
+        print("⏸️ Señal HOLD - No hay acción")
         return
     
     # Cargar Risk Manager
@@ -422,12 +430,12 @@ def execute_signal():
     
     risk_manager.print_stats()
     
-    # Verificar máximo de posiciones
+    # Verificar si ya hay una orden abierta
     if os.path.exists(OPEN_ORDERS_FILE):
         with open(OPEN_ORDERS_FILE, 'r') as f:
             open_orders = json.load(f)
-        if len(open_orders) >= risk_manager.max_open_positions:
-            print(f"⚠️ Máximo de posiciones ({risk_manager.max_open_positions}) alcanzado")
+        if len(open_orders) >= 1:  # 🆕 Solo 1 orden a la vez
+            print(f"⚠️ Ya hay {len(open_orders)} orden(es) abierta(s). Solo se permite 1 a la vez.")
             return
     
     current_price = get_current_price()
@@ -457,8 +465,8 @@ def execute_signal():
         return
     
     print(f"✅ R/R Ratio: {trade_validation['rr_ratio']:.2f}")
-    print(f"   Risk: ${trade_validation['risk']:.2f}")
-    print(f"   Reward: ${trade_validation['reward']:.2f}")
+    print(f"   Risk: ${trade_validation['risk']:.4f}")
+    print(f"   Reward: ${trade_validation['reward']:.4f}")
     
     # Calcular posición con leverage 10x
     position = risk_manager.calculate_position_size(current_price, sl, confidence, side, use_leverage=True)
@@ -475,15 +483,15 @@ def execute_signal():
     print(f"🚀 EJECUTANDO ORDEN CON LEVERAGE 10X")
     print(f"{'='*70}")
     print(f"📊 Señal: {signal}")
-    print(f"💰 Precio: ${current_price:.2f}")
+    print(f"💰 Precio: ${current_price:.4f}")
     print(f"📈 Volumen: {volume} ADA (${position['position_value']:.2f})")
     print(f"   • Leverage: {position['leverage']}x")
     print(f"   • Riesgo: ${position['risk_amount']:.2f}")
     print(f"   • Margen Req: ${position['margin_required']:.2f}")
     print(f"   • Capital usado: {position['capital_used_%']:.1f}%")
-    print(f"🎯 TP: ${tp:.2f} ({((tp-current_price)/current_price*100):+.2f}%)")
-    print(f"🛑 SL: ${sl:.2f} ({((sl-current_price)/current_price*100):+.2f}%)")
-    print(f"⚠️ Liquidación: ${position['liquidation_price']:.2f}")
+    print(f"🎯 TP: ${tp:.4f} ({((tp-current_price)/current_price*100):+.2f}%)")
+    print(f"🛑 SL: ${sl:.4f} ({((sl-current_price)/current_price*100):+.2f}%)")
+    print(f"⚠️ Liquidación: ${position['liquidation_price']:.4f}")
     print(f"📊 R/R: {trade_validation['rr_ratio']:.2f}")
     print(f"🎲 Confianza: {confidence:.1f}%")
     print(f"{'='*70}\n")
@@ -556,23 +564,23 @@ def execute_signal():
 🔥 *LIVE TRADING - Nueva Orden*
 
 📊 Tipo: {signal}
-💰 Entrada: ${current_price:.2f}
+💰 Entrada: ${current_price:.4f}
 📈 Volumen: {volume} ADA
 ⚡ Leverage: {position['leverage']}x
    • Valor: ${position['position_value']:.2f}
    • Margen: ${position['margin_required']:.2f}
    • Riesgo: ${position['risk_amount']:.2f}
 
-🎯 TP: ${tp:.2f} ({((tp-current_price)/current_price*100):+.2f}%)
-🛑 SL: ${sl:.2f} ({((sl-current_price)/current_price*100):+.2f}%)
-⚠️ Liquidación: ${position['liquidation_price']:.2f}
+🎯 TP: ${tp:.4f} ({((tp-current_price)/current_price*100):+.2f}%)
+🛑 SL: ${sl:.4f} ({((sl-current_price)/current_price*100):+.2f}%)
+⚠️ Liquidación: ${position['liquidation_price']:.4f}
 📊 R/R: {trade_validation['rr_ratio']:.2f}
 🎲 Confianza: {confidence:.1f}%
 
 📈 *Estado Cuenta:*
    Capital: ${stats['current_capital']:.2f}
    Margen Usado: ${stats['margin_used']:.2f}
-   Posiciones: {stats['open_positions']}/{risk_manager.max_open_positions}
+   Posiciones: {stats['open_positions']}/1
 """
             send_telegram(msg)
         else:
@@ -646,16 +654,16 @@ def execute_signal():
 💼 *SIMULACIÓN - Nueva Orden*
 
 📊 Tipo: {signal}
-💰 Entrada: ${current_price:.2f}
+💰 Entrada: ${current_price:.4f}
 📈 Volumen: {volume} ADA
 ⚡ Leverage: {position['leverage']}x
    • Valor: ${position['position_value']:.2f}
    • Margen: ${position['margin_required']:.2f}
    • Riesgo: ${position['risk_amount']:.2f}
 
-🎯 TP: ${tp:.2f} ({((tp-current_price)/current_price*100):+.2f}%)
-🛑 SL: ${sl:.2f} ({((sl-current_price)/current_price*100):+.2f}%)
-⚠️ Liquidación: ${position['liquidation_price']:.2f}
+🎯 TP: ${tp:.4f} ({((tp-current_price)/current_price*100):+.2f}%)
+🛑 SL: ${sl:.4f} ({((sl-current_price)/current_price*100):+.2f}%)
+⚠️ Liquidación: ${position['liquidation_price']:.4f}
 📊 R/R: {trade_validation['rr_ratio']:.2f}
 
 ⚠️ *MODO SIMULACIÓN*
