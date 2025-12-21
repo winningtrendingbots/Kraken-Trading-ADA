@@ -1,9 +1,9 @@
 """
-PREDICCIÓN + FILTROS TÉCNICOS
+PREDICCIÓN + FILTROS TÉCNICOS - VERSIÓN CORREGIDA
 
 Este script:
 1. Carga el modelo LSTM entrenado
-2. Descarga datos recientes de adaUSD (1h)
+2. Descarga datos recientes de ADAUSD (1h)
 3. Genera predicción (High, Low, Close)
 4. Aplica filtros técnicos (RSI, ATR, Tendencia)
 5. Genera señal: BUY, SELL o HOLD
@@ -35,26 +35,44 @@ def send_telegram(msg):
     except Exception as e:
         print(f"❌ Telegram: {e}")
 
-# Clase del modelo (debe coincidir con adausd_lstm.py)
+
+# ✅ CLASE SINCRONIZADA CON adausd_lstm.py
 class MultiOutputLSTM(nn.Module):
-    def __init__(self, input_size=4, hidden_size=256, num_layers=3,
-                 output_size=3, dropout=0.3):
+    """Versión con BatchNorm - SINCRONIZADA con entrenamiento"""
+    def __init__(self, input_size=4, hidden_size=192, num_layers=2,
+                 output_size=3, dropout=0.35):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
+
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers,
-                             batch_first=True, dropout=dropout if num_layers > 1 else 0)
+                           batch_first=True, 
+                           dropout=dropout if num_layers > 1 else 0)
+        
+        # ✅ BatchNorm después de LSTM
+        self.bn1 = nn.BatchNorm1d(hidden_size)
+        
         self.fc1 = nn.Linear(hidden_size, hidden_size // 2)
+        
+        # ✅ BatchNorm intermedia
+        self.bn2 = nn.BatchNorm1d(hidden_size // 2)
+        
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
         self.fc2 = nn.Linear(hidden_size // 2, output_size)
 
     def forward(self, x):
         lstm_out, _ = self.lstm(x)
-        x = self.fc1(lstm_out[:, -1, :])
+        x = lstm_out[:, -1, :]
+        
+        x = self.bn1(x)  # ✅ Normalizar
+        x = self.fc1(x)
+        x = self.bn2(x)  # ✅ Normalizar
         x = self.relu(x)
         x = self.dropout(x)
+        
         return self.fc2(x)
+
 
 def calculate_rsi(prices, period=14):
     """Calcula RSI"""
@@ -208,19 +226,36 @@ def main():
         scaler_in = joblib.load(f'{model_dir}/scaler_input_{interval}.pkl')
         scaler_out = joblib.load(f'{model_dir}/scaler_output_{interval}.pkl')
         
-        # Cargar modelo
-        # DESPUÉS (arreglado)
+        # ✅ Cargar modelo con parámetros correctos
         checkpoint = torch.load(
             f'{model_dir}/adausd_lstm_{interval}.pth', 
             map_location=torch.device('cpu'),
-            weights_only=False  # Necesario para PyTorch >= 2.6
+            weights_only=False
         )
         
-        model = MultiOutputLSTM()
+        # Obtener configuración del modelo guardado
+        model_config = checkpoint.get('config', {})
+        hidden_size = model_config.get('hidden', 192)
+        num_layers = model_config.get('layers', 2)
+        
+        print(f"📋 Configuración del modelo:")
+        print(f"   Hidden Size: {hidden_size}")
+        print(f"   Num Layers: {num_layers}")
+        print(f"   Seq Length: {seq_len}")
+        
+        # ✅ Crear modelo con arquitectura correcta
+        model = MultiOutputLSTM(
+            input_size=4,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            output_size=3,
+            dropout=0.35
+        )
+        
         model.load_state_dict(checkpoint['model_state_dict'])
         model.eval()
         
-        print("✅ Modelo cargado\n")
+        print("✅ Modelo cargado correctamente\n")
         
     except Exception as e:
         error_msg = f"❌ Error cargando modelo: {str(e)}"
@@ -311,7 +346,7 @@ def main():
     print(f"📈 RSI:        {result['rsi']:.1f}")
     print(f"📊 ATR:        ${result['atr']:.2f}")
     print(f"📉 Volatilidad: {result['volatility_%']:.2f}%")
-    print(f"📐 Tendencia:  {result['trend']}")
+    print(f"🔍 Tendencia:  {result['trend']}")
     print("="*70 + "\n")
     
     # 7. GUARDAR SEÑAL
