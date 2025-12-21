@@ -137,28 +137,73 @@ class EarlyStopping:
             if self.counter >= self.patience:
                 self.early_stop = True
 
-def prepare_data(df, seq_len=60):
+def prepare_data_CORRECTED(df, seq_len=60, train_size=0.75, val_size=0.15):
+    """
+    Preparación de datos SIN data leakage
+    - Fit scaler SOLO en train
+    - Predicción correcta (i->i+1, no i->i+2)
+    """
     print(f"\n{'='*70}")
-    print("  PREPARANDO DATOS")
+    print("  PREPARANDO DATOS (SIN LEAKAGE)")
     print("="*70)
     print(f"Input: OHLC (4) → Output: HLC (3) | Secuencia: {seq_len} velas\n")
 
-    inp = df[['open', 'high', 'low', 'close']].values
-    out = df[['high', 'low', 'close']].values
+    # 1. Dividir PRIMERO en train/val/test (temporalmente)
+    total = len(df)
+    train_end = int(total * train_size)
+    val_end = int(total * (train_size + val_size))
+    
+    df_train = df.iloc[:train_end].copy()
+    df_val = df.iloc[train_end:val_end].copy()
+    df_test = df.iloc[val_end:].copy()
+    
+    print(f"📊 División temporal:")
+    print(f"   Train: {len(df_train):,} velas ({df_train['time'].min()} → {df_train['time'].max()})")
+    print(f"   Val:   {len(df_val):,} velas ({df_val['time'].min()} → {df_val['time'].max()})")
+    print(f"   Test:  {len(df_test):,} velas ({df_test['time'].min()} → {df_test['time'].max()})\n")
 
+    # 2. Extraer features y targets
+    inp_train = df_train[['open', 'high', 'low', 'close']].values
+    out_train = df_train[['high', 'low', 'close']].values
+    
+    inp_val = df_val[['open', 'high', 'low', 'close']].values
+    out_val = df_val[['high', 'low', 'close']].values
+    
+    inp_test = df_test[['open', 'high', 'low', 'close']].values
+    out_test = df_test[['high', 'low', 'close']].values
+
+    # 3. FIT scaler SOLO en train
     scaler_in = MinMaxScaler()
     scaler_out = MinMaxScaler()
-    inp_scaled = scaler_in.fit_transform(inp)
-    out_scaled = scaler_out.fit_transform(out)
+    
+    inp_train_scaled = scaler_in.fit_transform(inp_train)        # ✅ FIT solo train
+    out_train_scaled = scaler_out.fit_transform(out_train)       # ✅ FIT solo train
+    
+    inp_val_scaled = scaler_in.transform(inp_val)                # ✅ TRANSFORM val
+    out_val_scaled = scaler_out.transform(out_val)               # ✅ TRANSFORM val
+    
+    inp_test_scaled = scaler_in.transform(inp_test)              # ✅ TRANSFORM test
+    out_test_scaled = scaler_out.transform(out_test)             # ✅ TRANSFORM test
 
-    X, y = [], []
-    for i in tqdm(range(seq_len, len(inp_scaled) - 1), desc="Secuencias"):
-        X.append(inp_scaled[i-seq_len:i])
-        y.append(out_scaled[i+1, :])
-
-    X, y = np.array(X), np.array(y)
-    print(f"\n✅ X: {X.shape} | y: {y.shape}\n")
-    return X, y, scaler_in, scaler_out
+    # 4. Crear secuencias
+    def create_sequences(inp_scaled, out_scaled, seq_len):
+        X, y = [], []
+        # ✅ CORRECCIÓN: Predecir i (no i+1)
+        for i in range(seq_len, len(inp_scaled)):
+            X.append(inp_scaled[i-seq_len:i])    # Velas [i-seq_len, ..., i-1]
+            y.append(out_scaled[i, :])            # Predice vela i (la SIGUIENTE)
+        return np.array(X), np.array(y)
+    
+    print("🔄 Creando secuencias...")
+    X_train, y_train = create_sequences(inp_train_scaled, out_train_scaled, seq_len)
+    X_val, y_val = create_sequences(inp_val_scaled, out_val_scaled, seq_len)
+    X_test, y_test = create_sequences(inp_test_scaled, out_test_scaled, seq_len)
+    
+    print(f"✅ Train: X={X_train.shape}, y={y_train.shape}")
+    print(f"✅ Val:   X={X_val.shape}, y={y_val.shape}")
+    print(f"✅ Test:  X={X_test.shape}, y={y_test.shape}\n")
+    
+    return (X_train, y_train), (X_val, y_val), (X_test, y_test), scaler_in, scaler_out
 
 def calc_metrics(y_true, y_pred):
     metrics = {}
@@ -408,20 +453,18 @@ if __name__ == "__main__":
         print(f"🖥️ Device: {device}\n")
 
         # 1. Descargar
-        df = download_adausd(interval=INTERVAL, path='ADAUSD_1h_data.csv')
-
-        # 2. Preparar
-        X, y, scaler_in, scaler_out = prepare_data(df, SEQ_LEN)
-
-        # 3. Split
-        print("="*70)
-        print("  DIVISIÓN DE DATOS")
-        print("="*70)
-        X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.1, shuffle=False)
-        X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.15, shuffle=False)
-        print(f"Train: {len(X_train):,} | Val: {len(X_val):,} | Test: {len(X_test):,}\n")
-
-        # 4. Loaders
+        df = download_adausd(interval='1h', path='ADAUSD_1h_data.csv')
+    
+        # ✅ NUEVO: Preparar datos correctamente
+        (X_train, y_train), (X_val, y_val), (X_test, y_test), scaler_in, scaler_out = \
+            prepare_data_CORRECTED(df, seq_len=60, train_size=0.75, val_size=0.15)
+        
+        # ✅ YA NO NECESITAS train_test_split después (ya está dividido)
+        # ELIMINA ESTAS LÍNEAS:
+        # X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.1, shuffle=False)
+        # X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.15, shuffle=False)
+        
+        # 4. Loaders (sin cambios)
         train_loader = DataLoader(ForexDataset(X_train, y_train), BATCH, shuffle=True)
         val_loader = DataLoader(ForexDataset(X_val, y_val), BATCH, shuffle=False)
         test_loader = DataLoader(ForexDataset(X_test, y_test), BATCH, shuffle=False)
