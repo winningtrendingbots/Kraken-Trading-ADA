@@ -21,7 +21,7 @@ from datetime import datetime
 
 # Configuración de Telegram
 TELEGRAM_API = os.environ.get('TELEGRAM_API', '')
-CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+CHAT_ID = os.environ.get('CHAT_ID', '')
 
 def send_telegram_message(message):
     if not TELEGRAM_API or not CHAT_ID:
