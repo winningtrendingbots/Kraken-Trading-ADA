@@ -100,25 +100,41 @@ class ForexDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-class MultiOutputLSTM(nn.Module):
-    def __init__(self, input_size=4, hidden_size=256, num_layers=3,
-                 output_size=3, dropout=0.3):
+
+class MultiOutputLSTM_L1(nn.Module):
+    """Versión con BatchNorm - cambio mínimo respecto a tu código"""
+    def __init__(self, input_size=4, hidden_size=192, num_layers=2,
+                 output_size=3, dropout=0.35):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
 
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers,
-                             batch_first=True, dropout=dropout if num_layers > 1 else 0)
+                           batch_first=True, 
+                           dropout=dropout if num_layers > 1 else 0)
+        
+        # ✅ NUEVO: BatchNorm después de LSTM
+        self.bn1 = nn.BatchNorm1d(hidden_size)
+        
         self.fc1 = nn.Linear(hidden_size, hidden_size // 2)
+        
+        # ✅ NUEVO: BatchNorm intermedia
+        self.bn2 = nn.BatchNorm1d(hidden_size // 2)
+        
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
         self.fc2 = nn.Linear(hidden_size // 2, output_size)
 
     def forward(self, x):
         lstm_out, _ = self.lstm(x)
-        x = self.fc1(lstm_out[:, -1, :])
+        x = lstm_out[:, -1, :]
+        
+        x = self.bn1(x)  # ✅ Normalizar
+        x = self.fc1(x)
+        x = self.bn2(x)  # ✅ Normalizar
         x = self.relu(x)
         x = self.dropout(x)
+        
         return self.fc2(x)
 
 class EarlyStopping:
@@ -222,7 +238,7 @@ def train_model(model, train_loader, val_loader, epochs, lr, device, patience):
     print(f"Epochs: {epochs} | LR: {lr} | Device: {device} | Patience: {patience}\n")
 
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)  # ✅ NUEVO
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)  
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
     early_stop = EarlyStopping(patience)
 
@@ -440,14 +456,14 @@ if __name__ == "__main__":
 
         # CONFIGURACIÓN
         INTERVAL = '1h'
-        SEQ_LEN = 60
-        HIDDEN = 128           # ⬇️ CAMBIO: 256 → 128
-        LAYERS = 2             # ⬇️ CAMBIO: 3 → 2
-        DROPOUT = 0.4          # ⬆️ CAMBIO: 0.2 → 0.4
-        BATCH = 128
-        EPOCHS = 150
-        LR = 0.001
-        PATIENCE = 15          # ⬇️ CAMBIO: 20 → 15
+        SEQ_LEN = 90           # ⬆️ De 60 → 90 (50% más contexto)
+        HIDDEN = 192           # ⬇️ De 256 → 192 (25% reducción)
+        LAYERS = 2             # ⬇️ De 3 → 2 (1 capa menos)
+        DROPOUT = 0.35         # ⬆️ De 0.2 → 0.35 (75% más dropout)
+        BATCH = 256            # ⬆️ De 128 → 256 (batches más grandes)
+        EPOCHS = 120           # ⬇️ De 150 → 120 (20% menos épocas)
+        LR = 0.0008            # ⬇️ De 0.001 → 0.0008 (20% más lento)
+        PATIENCE = 15          # ⬇️ De 20 → 15 (para antes)
 
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"🖥️ Device: {device}\n")
