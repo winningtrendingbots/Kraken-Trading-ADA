@@ -176,7 +176,7 @@ def train_model(model, train_loader, val_loader, epochs, lr, device, patience):
     print(f"Epochs: {epochs} | LR: {lr} | Device: {device} | Patience: {patience}\n")
 
     criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-4)  # ✅ NUEVO
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
     early_stop = EarlyStopping(patience)
 
@@ -395,13 +395,13 @@ if __name__ == "__main__":
         # CONFIGURACIÓN
         INTERVAL = '1h'
         SEQ_LEN = 60
-        HIDDEN = 256
-        LAYERS = 3
-        DROPOUT = 0.2
+        HIDDEN = 128           # ⬇️ CAMBIO: 256 → 128
+        LAYERS = 2             # ⬇️ CAMBIO: 3 → 2
+        DROPOUT = 0.4          # ⬆️ CAMBIO: 0.2 → 0.4
         BATCH = 128
         EPOCHS = 150
         LR = 0.001
-        PATIENCE = 20
+        PATIENCE = 15          # ⬇️ CAMBIO: 20 → 15
 
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"🖥️ Device: {device}\n")
@@ -485,6 +485,41 @@ Close:
   • R²: {metrics['Close']['R2']:.4f}
   • MAPE: {metrics['Close']['MAPE']:.2f}%
 """
+
+        # ✅ NUEVO: Guardar timestamp y métricas para forzar commit
+        training_summary = {
+            'timestamp': datetime.now().isoformat(),
+            'training_completed': True,
+            'total_time_minutes': round(total_time / 60, 2),
+            'epochs_completed': len(train_l),
+            'best_val_loss': float(min(val_l)),
+            'final_metrics': {
+                'high': {k: float(v) for k, v in metrics['High'].items()},
+                'low': {k: float(v) for k, v in metrics['Low'].items()},
+                'close': {k: float(v) for k, v in metrics['Close'].items()}
+            },
+            'model_config': {
+                'hidden_size': HIDDEN,
+                'num_layers': LAYERS,
+                'dropout': DROPOUT,
+                'seq_len': SEQ_LEN,
+                'total_params': params
+            }
+        }
+        
+        with open(f'{model_dir}/training_summary.json', 'w') as f:
+            json.dump(training_summary, f, indent=2)
+        
+        # Crear archivo de timestamp que siempre cambia
+        with open('LAST_TRAINING.txt', 'w') as f:
+            f.write(f"Last training: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
+            f.write(f"Best Val Loss: {min(val_l):.8f}\n")
+            f.write(f"Total time: {total_time/60:.1f} minutes\n")
+        
+        print(f"✅ Training summary guardado: {model_dir}/training_summary.json")
+        print(f"✅ Timestamp guardado: LAST_TRAINING.txt")
+        
+        send_telegram(msg)
         
         print("\n" + "="*70)
         print("✅✅✅  COMPLETADO  ✅✅✅")
