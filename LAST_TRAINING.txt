@@ -1,4 +1,4 @@
-Last training: 2025-12-21 09:27:47 UTC
-Best Val Loss: 0.00009552
-Gap Train-Test: 0.0042 (✅ EXCELENTE)
-Total time: 8.2 minutes
+Last training: 2025-12-21 15:18:23 UTC
+Best Val Loss: 0.00009201
+Gap Train-Test: 0.0060 (✅ EXCELENTE)
+Total time: 9.2 minutes
