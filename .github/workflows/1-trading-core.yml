@@ -1,10 +1,10 @@
-name: 🤖 Trading Core
+name: 🤖 Trading Bot - 5 Minutos
 
 on:
   schedule:
     - cron: '0 9 * * *'      # Entrenar diario 9 AM UTC
-    - cron: '0 * * * *'      # Predicción cada hora
-    - cron: '*/5 * * * *'    # Monitoreo cada 5 minutos ⏰
+    - cron: '*/5 * * * *'    # 🆕 Predicción + Trading CADA 5 MINUTOS
+    - cron: '*/10 * * * *'   # Monitoreo cada 15 minutos
   
   workflow_dispatch:
     inputs:
@@ -15,7 +15,7 @@ on:
         options:
           - train        # Entrenar modelo
           - predict      # Predicción + Trading
-          - monitor      # Monitoreo cada 5 min
+          - monitor      # Monitoreo
           - all          # Todo
 
 permissions:
@@ -51,13 +51,14 @@ jobs:
             echo "should_train=false" >> $GITHUB_OUTPUT
           fi
           
-          if [[ "$SCHEDULE" == "0 * * * *" ]] || [[ "$TASK" == "predict" ]] || [[ "$TASK" == "all" ]]; then
+          # 🆕 Predicción + Trading cada 5 minutos
+          if [[ "$SCHEDULE" == "*/5 * * * *" ]] || [[ "$TASK" == "predict" ]] || [[ "$TASK" == "all" ]]; then
             echo "should_predict=true" >> $GITHUB_OUTPUT
           else
             echo "should_predict=false" >> $GITHUB_OUTPUT
           fi
           
-          if [[ "$SCHEDULE" == "*/5 * * * *" ]] || [[ "$TASK" == "monitor" ]] || [[ "$TASK" == "all" ]]; then
+          if [[ "$SCHEDULE" == "*/15 * * * *" ]] || [[ "$TASK" == "monitor" ]] || [[ "$TASK" == "all" ]]; then
             echo "should_monitor=true" >> $GITHUB_OUTPUT
           else
             echo "should_monitor=false" >> $GITHUB_OUTPUT
@@ -105,19 +106,6 @@ jobs:
           [ -f "ADAUSD_1h_data.csv" ] && echo "✅ CSV generado" || echo "❌ No se generó CSV"
           [ -f "adausd_results.png" ] && echo "✅ Gráfica generada" || echo "❌ No se generó gráfica"
       
-      - name: 🐛 Debug - Verificar archivos generados
-        run: |
-          echo "📂 Contenido del directorio:"
-          ls -lha
-          
-          echo ""
-          echo "📁 ADAUSD_MODELS:"
-          ls -lh ADAUSD_MODELS/ || echo "❌ No existe"
-          
-          echo ""
-          echo "📄 Archivos CSV y PNG:"
-          ls -lh *.csv *.png *.txt 2>/dev/null || echo "No hay archivos"
-      
       - name: 💾 Guardar modelo y archivos
         run: |
           git config user.name "github-actions[bot]"
@@ -133,15 +121,7 @@ jobs:
           git add -f LAST_TRAINING.txt || echo "⚠️ No se pudo agregar timestamp"
           git add -f risk_config.json 2>/dev/null || true
           
-          echo ""
-          echo "📊 Estado de Git:"
-          git status
-          
-          echo ""
-          echo "📋 Archivos staged:"
-          git diff --staged --name-only
-          
-          # Siempre hacer commit (incluso si no hay cambios aparentes)
+          # Siempre hacer commit
           if git diff --staged --quiet; then
             echo "⚠️ No hay cambios detectados, creando commit vacío con timestamp..."
             git commit --allow-empty -m "🤖 Model training completed [$(date +'%Y-%m-%d %H:%M UTC')]"
@@ -157,7 +137,7 @@ jobs:
           echo "✅ Modelo y archivos guardados exitosamente"
 
   # ========================================
-  # JOB 3: PREDICCIÓN + TRADING (CADA HORA)
+  # JOB 3: PREDICCIÓN + TRADING (CADA 5 MIN)
   # ========================================
   predict-and-trade:
     needs: [determine-task, train-model]
@@ -166,7 +146,7 @@ jobs:
       needs.determine-task.outputs.should_predict == 'true' &&
       (needs.train-model.result == 'success' || needs.train-model.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
@@ -193,7 +173,28 @@ jobs:
           fi
           echo "✅ Modelo encontrado"
       
+      - name: 🔍 Verificar si hay orden abierta
+        id: check_order
+        run: |
+          if [ -f "open_orders.json" ]; then
+            ORDERS=$(cat open_orders.json | grep -c "txid" || echo "0")
+            echo "orders_count=$ORDERS" >> $GITHUB_OUTPUT
+            
+            if [ "$ORDERS" -gt "0" ]; then
+              echo "⚠️ Ya hay $ORDERS orden(es) abierta(s)"
+              echo "⏭️ Saltando predicción y trading (solo 1 orden permitida)"
+              echo "skip_trading=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ No hay órdenes abiertas, procediendo..."
+              echo "skip_trading=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "✅ No hay archivo de órdenes, procediendo..."
+            echo "skip_trading=false" >> $GITHUB_OUTPUT
+          fi
+      
       - name: 🔮 Generar predicción
+        if: steps.check_order.outputs.skip_trading != 'true'
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -202,6 +203,7 @@ jobs:
           python predict_and_filter.py
       
       - name: 💼 Ejecutar trading
+        if: steps.check_order.outputs.skip_trading != 'true'
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -223,14 +225,18 @@ jobs:
           if git diff --staged --quiet; then
             echo "ℹ️ No hay cambios"
           else
-            SIGNALS=$([ -f trading_signals.csv ] && tail -n 1 trading_signals.csv | cut -d',' -f10 || echo "N/A")
-            git commit -m "📊 Trading update [$(date +'%H:%M UTC')] Signal: $SIGNALS"
+            SIGNAL="N/A"
+            if [ -f "trading_signals.csv" ]; then
+              SIGNAL=$(tail -n 1 trading_signals.csv | cut -d',' -f10 || echo "N/A")
+            fi
+            
+            git commit -m "📊 Trading [$(date +'%H:%M UTC')] Signal: $SIGNAL"
             git push origin main
             echo "✅ Datos guardados"
           fi
 
   # ========================================
-  # JOB 4: MONITOREO CADA 5 MINUTOS ⏰
+  # JOB 4: MONITOREO CADA 15 MINUTOS
   # ========================================
   monitor-orders:
     needs: determine-task
@@ -254,14 +260,14 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: 🔍 Monitorear órdenes cada 5 min
+      - name: 🔍 Monitorear órdenes cada 15 min
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
           KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
         run: |
-          echo "🔍 Monitoreando órdenes abiertas (cada 5 min)..."
+          echo "🔍 Monitoreando órdenes abiertas (cada 15 min)..."
           
           if [ ! -f "open_orders.json" ]; then
             echo "ℹ️ No hay órdenes abiertas"
@@ -290,37 +296,15 @@ jobs:
           if git diff --staged --quiet; then
             echo "ℹ️ No hay cambios"
           else
-            CLOSED=$([ -f kraken_trades.csv ] && tail -n 1 kraken_trades.csv | grep "$(date +'%Y-%m-%d')" | wc -l || echo "0")
+            CLOSED=0
+            if [ -f kraken_trades.csv ]; then
+              CLOSED=$(tail -n +2 kraken_trades.csv | grep "$(date +'%Y-%m-%d')" | wc -l || echo "0")
+            fi
+            
             git commit -m "🔍 Monitor [$(date +'%H:%M UTC')] Closed: $CLOSED"
             git push origin main
             echo "✅ Estado actualizado"
           fi
-      
-      - name: 📊 Resumen
-        if: always()
-        run: |
-          echo ""
-          echo "═══════════════════════════════════════"
-          echo "  📊 RESUMEN DE MONITOREO"
-          echo "═══════════════════════════════════════"
-          
-          if [ -f "open_orders.json" ]; then
-            OPEN=$(cat open_orders.json | grep -c "txid" || echo "0")
-            echo "Órdenes abiertas: $OPEN"
-          fi
-          
-          if [ -f "kraken_trades.csv" ]; then
-            TODAY=$(tail -n +2 kraken_trades.csv | grep "$(date +'%Y-%m-%d')" | wc -l)
-            echo "Trades hoy: $TODAY"
-            
-            if [ $TODAY -gt 0 ]; then
-              PROFIT=$(tail -n +2 kraken_trades.csv | grep "$(date +'%Y-%m-%d')" | cut -d',' -f11 | awk '{sum+=$1} END {print sum}')
-              echo "P&L hoy: \$$PROFIT"
-            fi
-          fi
-          
-          echo "═══════════════════════════════════════"
-          echo "✅ Monitoreo completado"
 
   # ========================================
   # JOB 5: NOTIFICACIÓN FINAL
@@ -347,7 +331,7 @@ jobs:
             STATUS="✅ All OK"
           fi
           
-          MSG="🤖 *Trading Bot*%0A%0A"
+          MSG="🤖 *Trading Bot - 5min*%0A%0A"
           MSG="${MSG}Status: ${STATUS}%0A"
           MSG="${MSG}Time: $(date +'%Y-%m-%d %H:%M UTC')%0A%0A"
           
@@ -355,7 +339,12 @@ jobs:
           [[ "${{ needs.determine-task.outputs.should_predict }}" == "true" ]] && MSG="${MSG}🔮 Prediction: ${{ needs.predict-and-trade.result }}%0A"
           [[ "${{ needs.determine-task.outputs.should_monitor }}" == "true" ]] && MSG="${MSG}🔍 Monitor: ${{ needs.monitor-orders.result }}%0A"
           
-          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" \
-            -d text="${MSG}" \
-            -d parse_mode="Markdown" || echo "⚠️ Telegram notification failed"
+          # Solo enviar si hay fallo o si es ejecución manual
+          if [[ "${STATUS}" == *"failed"* ]] || [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="${MSG}" \
+              -d parse_mode="Markdown" || echo "⚠️ Telegram notification failed"
+          else
+            echo "✅ Todo OK - No se envía notificación (reducir spam)"
+          fi
