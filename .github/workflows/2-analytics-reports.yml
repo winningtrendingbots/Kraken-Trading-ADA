@@ -71,7 +71,7 @@ jobs:
       - name: Generate full analytics
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "📊 Generando análisis completo..."
           python analytics.py || {
@@ -96,7 +96,7 @@ jobs:
         if: github.event.schedule == '0 23 * * *' || github.event.inputs.report_type == 'daily'
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "📅 Generando reporte diario..."
           python -c "
@@ -178,7 +178,7 @@ except Exception as e:
         if: github.event.schedule == '0 12 * * 0' || github.event.inputs.report_type == 'weekly'
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "📅 Generando reporte semanal..."
           python -c "
@@ -260,7 +260,7 @@ except Exception as e:
       - name: Check system health
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "🏥 Verificando salud del sistema..."
           
