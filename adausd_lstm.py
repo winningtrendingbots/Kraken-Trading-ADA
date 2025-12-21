@@ -467,6 +467,17 @@ if __name__ == "__main__":
         PATIENCE = 15
         INTERVAL = '1h'
         """
+        
+        INTERVAL = '1h'
+        SEQ_LEN = 72       # 🔼 3 días exactos
+        HIDDEN = 160       # 🔼 Más capacidad
+        LAYERS = 3         # 🔼 Más profundidad
+        DROPOUT = 0.35     # 🔽 Menos dropout
+        BATCH = 96         # 🔽 Batches más pequeños
+        EPOCHS = 180       # ✅ Similar
+        LR = 0.0012        # 🔼 Learning rate mayor
+        PATIENCE = 15      # ✅ Mantener
+        """
         SEQ_LEN = 90       # 🔼 Más contexto histórico (3.75 días)
         HIDDEN = 96        # 🔽 Reducir complejidad
         LAYERS = 2         # ✅ Mantener
@@ -475,6 +486,7 @@ if __name__ == "__main__":
         EPOCHS = 200       # 🔼 Más tiempo con patience
         LR = 0.0008        # 🔽 Learning rate más bajo
         PATIENCE = 20      # 🔼 Más paciencia
+        """
 
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"🖥️ Device: {device}\n")
