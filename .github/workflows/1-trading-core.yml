@@ -105,22 +105,56 @@ jobs:
           [ -f "ADAUSD_1h_data.csv" ] && echo "✅ CSV generado" || echo "❌ No se generó CSV"
           [ -f "adausd_results.png" ] && echo "✅ Gráfica generada" || echo "❌ No se generó gráfica"
       
-      - name: 💾 Guardar modelo
+      - name: 🐛 Debug - Verificar archivos generados
+        run: |
+          echo "📂 Contenido del directorio:"
+          ls -lha
+          
+          echo ""
+          echo "📁 ADAUSD_MODELS:"
+          ls -lh ADAUSD_MODELS/ || echo "❌ No existe"
+          
+          echo ""
+          echo "📄 Archivos CSV y PNG:"
+          ls -lh *.csv *.png *.txt 2>/dev/null || echo "No hay archivos"
+      
+      - name: 💾 Guardar modelo y archivos
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
+          echo "📥 Sincronizando con remoto..."
           git pull --rebase origin main || true
           
-          git add ADAUSD_MODELS/ ADAUSD_1h_data.csv adausd_results.png risk_config.json 2>/dev/null || true
+          echo "➕ Agregando archivos..."
+          git add -f ADAUSD_MODELS/ || echo "⚠️ No se pudo agregar ADAUSD_MODELS/"
+          git add -f ADAUSD_1h_data.csv || echo "⚠️ No se pudo agregar CSV"
+          git add -f adausd_results.png || echo "⚠️ No se pudo agregar PNG"
+          git add -f LAST_TRAINING.txt || echo "⚠️ No se pudo agregar timestamp"
+          git add -f risk_config.json 2>/dev/null || true
           
+          echo ""
+          echo "📊 Estado de Git:"
+          git status
+          
+          echo ""
+          echo "📋 Archivos staged:"
+          git diff --staged --name-only
+          
+          # Siempre hacer commit (incluso si no hay cambios aparentes)
           if git diff --staged --quiet; then
-            echo "ℹ️ No hay cambios"
+            echo "⚠️ No hay cambios detectados, creando commit vacío con timestamp..."
+            git commit --allow-empty -m "🤖 Model training completed [$(date +'%Y-%m-%d %H:%M UTC')]"
           else
+            echo "✅ Cambios detectados, commiteando..."
             git commit -m "🤖 Model trained [$(date +'%Y-%m-%d %H:%M UTC')]"
-            git push origin main
-            echo "✅ Modelo guardado"
           fi
+          
+          echo ""
+          echo "📤 Pushing to remote..."
+          git push origin main
+          
+          echo "✅ Modelo y archivos guardados exitosamente"
 
   # ========================================
   # JOB 3: PREDICCIÓN + TRADING (CADA HORA)
