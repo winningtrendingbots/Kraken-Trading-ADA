@@ -1,0 +1,1 @@
+tengo que corregir más cosas ... por algún motivo el bot no funciona ... hay que añadir a todo esto: CHAT_ID: ${{ secrets.CHAT_ID }}  y más cambios
