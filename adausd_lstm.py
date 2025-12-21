@@ -17,6 +17,7 @@ import joblib
 import yfinance as yf
 from tqdm.auto import tqdm
 import requests
+import datetime
 
 # Configuración de Telegram
 TELEGRAM_API = os.environ.get('TELEGRAM_API', '')
