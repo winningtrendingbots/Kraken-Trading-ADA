@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# ✅ IMPORTANTE: NO ignorar estos archivos
+# Comentar o eliminar estas líneas si existen:
+# *.pth
+# *.pkl
+# *.png
+# *.csv
+# ADAUSD_MODELS/
