@@ -2,7 +2,7 @@ name: 🤖 Trading Bot - 5 Minutos
 
 on:
   schedule:
-    - cron: '0 9 * * *'      # Entrenar diario 9 AM UTC
+    - cron: '0 8 * * *'      # Entrenar diario 9 AM UTC
     - cron: '*/5 * * * *'    # 🆕 Predicción + Trading CADA 5 MINUTOS
     - cron: '*/10 * * * *'   # Monitoreo cada 15 minutos
   
