@@ -579,7 +579,7 @@ Close:
         print(f"✅ Training summary guardado: {model_dir}/training_summary.json")
         print(f"✅ Timestamp guardado: LAST_TRAINING.txt")
         
-        send_telegram(msg)
+        send_telegram_message(msg)
         
         print("\n" + "="*70)
         print("✅✅✅  COMPLETADO  ✅✅✅")
