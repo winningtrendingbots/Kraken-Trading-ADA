@@ -23,7 +23,7 @@ jobs:
       - name: Push data to github.io repo
         uses: peaceiris/actions-gh-pages@v4
         with:
-          personal_token: ${{ secrets.DASHBOARD_TOKEN }}
+          personal_token: ${{ secrets.GH_PAGES_TOKEN }}
           external_repository: winningtrendingbots/winningtrendingbots.github.io
           publish_dir: .
           destination_dir: data
