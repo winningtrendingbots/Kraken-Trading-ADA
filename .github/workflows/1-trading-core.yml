@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: '0 8 * * *'      # Entrenar diario 9 AM UTC
     - cron: '0 * * * *'      # Predicción + Trading cada hora
-    - cron: '*/15 * * * *'   # Monitoreo cada 15 minutos
+    - cron: '*/6 * * * *'   # Monitoreo cada 15 minutos
   
   workflow_dispatch:
     inputs:
