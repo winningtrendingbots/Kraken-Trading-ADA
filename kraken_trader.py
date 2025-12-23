@@ -96,7 +96,7 @@ def get_account_balance():
         return None
     
     # Buscar USD en el balance
-    usd_balance = float(result.get('ZUSD', 0))
+    usd_balance = float(result.get('USD', 0))
     
     print(f"✅ Balance USD: ${usd_balance:.2f}")
     
