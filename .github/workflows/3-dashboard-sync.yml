@@ -2,10 +2,11 @@ name: 🌐 Dashboard Sync
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/5 * * * *'  # Cada 5 minutos
   push:
     paths:
       - '*.csv'
+      - '*.json'
       - '*.png'
   workflow_dispatch:
 
@@ -16,38 +17,70 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout trading repo
+      - name: 📥 Checkout trading repo
         uses: actions/checkout@v4
         with:
           path: trading
       
-      - name: Checkout dashboard repo
+      - name: 📥 Checkout dashboard repo
         uses: actions/checkout@v4
         with:
           repository: winningtrendingbots/winningtrendingbots.github.io
           token: ${{ secrets.DASHBOARD_TOKEN }}
           path: dashboard
       
-      - name: Create folders
+      - name: 📂 Verificar archivos disponibles
         run: |
-          mkdir -p dashboard/data dashboard/images
+          echo "=== Archivos en trading repo ==="
+          ls -la trading/*.csv trading/*.json trading/*.png 2>/dev/null || echo "No hay archivos CSV/JSON/PNG aún"
       
-      - name: Copy files
+      - name: 📋 Copiar archivos
         run: |
-          cp trading/*.csv dashboard/data/ 2>/dev/null || true
-          cp trading/*.json dashboard/data/ 2>/dev/null || true
-          cp trading/*.png dashboard/images/ 2>/dev/null || true
+          # Copiar CSVs si existen
+          if ls trading/*.csv 1> /dev/null 2>&1; then
+            cp trading/*.csv dashboard/
+            echo "✅ CSVs copiados"
+          else
+            echo "⚠️ No hay archivos CSV para copiar"
+          fi
+          
+          # Copiar JSONs si existen
+          if ls trading/*.json 1> /dev/null 2>&1; then
+            cp trading/*.json dashboard/
+            echo "✅ JSONs copiados"
+          else
+            echo "⚠️ No hay archivos JSON para copiar"
+          fi
+          
+          # Copiar PNGs si existen
+          if ls trading/*.png 1> /dev/null 2>&1; then
+            cp trading/*.png dashboard/
+            echo "✅ PNGs copiados"
+          else
+            echo "⚠️ No hay archivos PNG para copiar"
+          fi
       
-      - name: Create metadata
+      - name: 📊 Crear metadata
         run: |
           cd dashboard
-          echo "{\"last_sync\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > data/metadata.json
+          echo "{
+            \"last_sync\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
+            \"source_repo\": \"winningtrendingbots/Kraken-Trading\",
+            \"sync_type\": \"automated\"
+          }" > metadata.json
       
-      - name: Commit and push
+      - name: 🚀 Commit y push
         run: |
           cd dashboard
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
           git add -A
-          git diff --staged --quiet || git commit -m "Sync $(date +%Y-%m-%d)"
-          git push
+          
+          if git diff --staged --quiet; then
+            echo "📭 No hay cambios para commitear"
+          else
+            git commit -m "🔄 Sync data $(date -u +%Y-%m-%d\ %H:%M:%S) UTC"
+            git push
+            echo "✅ Cambios pusheados exitosamente"
+          fi
