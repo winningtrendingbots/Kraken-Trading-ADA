@@ -1,0 +1,102 @@
+name: 👀 Monitor Orders
+
+on:
+  schedule:
+    - cron: '*/4 * * * *'  # Cada 4 minutos
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🔍 Check for active trades
+        id: check
+        run: |
+          # Verificar si existe archivo de trades
+          if [ -f "kraken_trades.csv" ]; then
+            lines=$(wc -l < kraken_trades.csv)
+            if [ $lines -gt 1 ]; then
+              echo "📊 Trades file exists with $lines lines"
+              echo "has_trades=true" >> $GITHUB_OUTPUT
+            else
+              echo "📭 Trades file empty"
+              echo "has_trades=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "📭 No trades file yet"
+            echo "has_trades=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Verificar si existe archivo de órdenes ejecutadas
+          if [ -f "orders_executed.csv" ]; then
+            echo "✅ Orders file exists"
+            echo "has_orders=true" >> $GITHUB_OUTPUT
+          else
+            echo "📭 No orders yet"
+            echo "has_orders=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 🐍 Setup Python
+        if: steps.check.outputs.has_orders == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 📦 Install dependencies
+        if: steps.check.outputs.has_orders == 'true'
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 👀 Monitor open orders
+        if: steps.check.outputs.has_orders == 'true'
+        env:
+          KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
+          KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          echo "👀 Monitoreando órdenes abiertas..."
+          python kraken_trader.py
+          echo "✅ Monitoreo completado"
+      
+      - name: 💾 Update trades
+        if: steps.check.outputs.has_orders == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Solo commitear si hay cambios en trades
+          git add kraken_trades.csv 2>/dev/null || true
+          
+          if git diff --staged --quiet; then
+            echo "ℹ️ No hay actualizaciones de trades"
+          else
+            timestamp=$(date -u +%H:%M)
+            git commit -m "📈 Orders monitored $timestamp UTC"
+            git push
+            echo "✅ Trades actualizados"
+          fi
+      
+      - name: 📊 Monitor summary
+        if: always()
+        run: |
+          echo ""
+          echo "════════════════════════════════════"
+          if [ "${{ steps.check.outputs.has_orders }}" = "true" ]; then
+            echo "✅ Monitoreo completado"
+            echo "   - Órdenes revisadas"
+            echo "   - Estados actualizados"
+          else
+            echo "⏳ Esperando primeras órdenes"
+            echo "   Se crearán cuando se ejecuten trades"
+          fi
+          echo "════════════════════════════════════"
