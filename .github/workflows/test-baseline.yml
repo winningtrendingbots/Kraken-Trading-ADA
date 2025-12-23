@@ -1,0 +1,143 @@
+name: 🔬 Test Baseline Comparison
+
+on:
+  workflow_dispatch:  # Ejecución manual
+
+permissions:
+  contents: read
+
+jobs:
+  test-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 📦 Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: ✅ Verify files exist
+        run: |
+          echo "🔍 Verificando archivos necesarios..."
+          
+          if [ ! -f "ADAUSD_1h_data.csv" ]; then
+            echo "❌ ERROR: ADAUSD_1h_data.csv no existe"
+            exit 1
+          fi
+          
+          if [ ! -d "ADAUSD_MODELS" ]; then
+            echo "❌ ERROR: ADAUSD_MODELS/ no existe"
+            exit 1
+          fi
+          
+          if [ ! -f "ADAUSD_MODELS/adausd_lstm_1h.pth" ]; then
+            echo "❌ ERROR: Modelo no existe"
+            exit 1
+          fi
+          
+          echo "✅ Todos los archivos críticos presentes"
+      
+      - name: 🔬 Run baseline comparison
+        env:
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          echo "🔬 Ejecutando prueba de baseline..."
+          python baseline_comparison.py
+      
+      - name: 📊 Show results
+        run: |
+          echo ""
+          echo "="*70
+          echo "  📊 RESULTADOS DE LA COMPARACIÓN"
+          echo "="*70
+          echo ""
+          
+          if [ -f "baseline_comparison.json" ]; then
+            cat baseline_comparison.json
+          else
+            echo "⚠️ No se generó baseline_comparison.json"
+          fi
+      
+      - name: 📤 Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: baseline-comparison-${{ github.run_number }}
+          path: |
+            baseline_comparison.json
+          retention-days: 30
+      
+      - name: 📱 Send results to Telegram
+        if: always()
+        env:
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          if [ -f "baseline_comparison.json" ]; then
+            # Extraer métricas clave
+            LSTM_R2=$(cat baseline_comparison.json | grep -A 5 '"lstm"' | grep '"r2"' | cut -d':' -f2 | cut -d',' -f1 | xargs)
+            NAIVE_R2=$(cat baseline_comparison.json | grep -A 5 '"naive"' | grep '"r2"' | cut -d':' -f2 | cut -d',' -f1 | xargs)
+            
+            LSTM_DIR=$(cat baseline_comparison.json | grep -A 6 '"lstm"' | grep '"direction_accuracy"' | cut -d':' -f2 | cut -d',' -f1 | xargs)
+            NAIVE_DIR=$(cat baseline_comparison.json | grep -A 6 '"naive"' | grep '"direction_accuracy"' | cut -d':' -f2 | cut -d',' -f1 | xargs)
+            
+            R2_IMPROVE=$(cat baseline_comparison.json | grep -A 2 '"improvement_over_naive"' | grep '"r2"' | cut -d':' -f2 | cut -d',' -f1 | xargs)
+            DIR_IMPROVE=$(cat baseline_comparison.json | grep -A 2 '"improvement_over_naive"' | grep '"direction"' | cut -d':' -f2 | cut -d'}' -f1 | xargs)
+            
+            # Determinar veredicto
+            if [ $(echo "$R2_IMPROVE < 0.01" | bc -l) -eq 1 ] && [ $(echo "$DIR_IMPROVE < 5" | bc -l) -eq 1 ]; then
+              VERDICT="🚨 MODELO NO ES ÚTIL"
+              EMOJI="❌"
+              RECOMMENDATION="Cambiar a predicción 6h+ adelante"
+            elif [ $(echo "$R2_IMPROVE < 0.03" | bc -l) -eq 1 ] && [ $(echo "$DIR_IMPROVE < 10" | bc -l) -eq 1 ]; then
+              VERDICT="⚠️ MARGINALMENTE ÚTIL"
+              EMOJI="🟡"
+              RECOMMENDATION="Optimizar para dirección, no MAE"
+            else
+              VERDICT="✅ MODELO ÚTIL"
+              EMOJI="✅"
+              RECOMMENDATION="Proceder a paper trading"
+            fi
+            
+            MSG="🔬 *Comparación LSTM vs Baseline*
+
+$EMOJI *$VERDICT*
+
+📊 *R² Scores:*
+   LSTM: $LSTM_R2
+   Naive: $NAIVE_R2
+   Mejora: +$R2_IMPROVE
+
+🎯 *Precisión Direccional:*
+   LSTM: $LSTM_DIR%
+   Naive: $NAIVE_DIR%
+   Mejora: +$DIR_IMPROVE%
+
+💡 *Recomendación:*
+$RECOMMENDATION
+
+📁 Ver detalles en Actions → Artifacts
+"
+            
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
+              -d chat_id="${CHAT_ID}" \
+              -d text="$MSG" \
+              -d parse_mode="Markdown" || echo "⚠️ Telegram falló"
+          else
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
+              -d chat_id="${CHAT_ID}" \
+              -d text="❌ Error: No se pudo generar comparación de baseline" \
+              -d parse_mode="Markdown" || echo "⚠️ Telegram falló"
+          fi
