@@ -15,7 +15,7 @@ class RiskManager:
     def __init__(self, 
                  initial_capital=40,             # 🆕 10€ inicial (se sincroniza con Kraken)
                  risk_per_trade=0.01,             # 2% de riesgo por trade
-                 max_leverage=5,                  # 🆕 5x max (más seguro con banca pequeña)
+                 max_leverage=10,                  # 🆕 5x max (más seguro con banca pequeña)
                  margin_usage_limit=0.6,          # Usar máximo 60% del margen
                  max_open_positions=1,            # 🆕 Solo 1 posición (con banca pequeña)
                  min_rr_ratio=1.5,               # Mínimo Risk/Reward 1:1.5
@@ -99,8 +99,8 @@ class RiskManager:
             self.max_leverage = 5
             print(f"   ℹ️ Leverage: 5x")
         else:
-            self.max_leverage = 5
-            print(f"   ℹ️ Leverage: 5x")
+            self.max_leverage = 10
+            print(f"   ℹ️ Leverage: 10x")
         
         self.save_config()
     
@@ -424,7 +424,7 @@ def get_risk_manager():
     return RiskManager(
         initial_capital=10,            # 🆕 Se sincroniza con Kraken automáticamente
         risk_per_trade=0.02,           # 2% riesgo por trade (0.20€)
-        max_leverage=5,                # 🆕 5x max (seguro para banca pequeña)
+        max_leverage=10,                # 🆕 5x max (seguro para banca pequeña)
         margin_usage_limit=0.6,        # Usar máximo 60% del margen
         max_open_positions=1,          # 🆕 Solo 1 posición a la vez
         min_rr_ratio=1.5,             # Mínimo R/R 1.5:1
@@ -452,6 +452,13 @@ if __name__ == "__main__":
     print(f"\n✅ Validación:")
     print(f"  R/R: {trade_valid.get('rr_ratio', 0):.2f}")
     print(f"  Válido: {trade_valid['valid']}")
+
+    # Verificación de tamaño mínimo
+    MIN_POSITION_VALUE_USD = 10  # Mínimo $10 por trade
+    
+    if position_value < MIN_POSITION_VALUE_USD:
+        result['reason'] = f"Posición demasiado pequeña (${position_value:.2f} < ${MIN_POSITION_VALUE_USD})"
+        return result
     
     if trade_valid['valid']:
         # Con leverage
