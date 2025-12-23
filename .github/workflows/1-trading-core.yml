@@ -122,7 +122,7 @@ jobs:
           
           echo "files_ok=$files_ok" >> $GITHUB_OUTPUT
       
-      - name: 💾 Guardar modelo (CON MANEJO DE CONFLICTOS)
+      - name: 💾 Guardar modelo (FIXED - SIN CONFLICTOS)
         if: steps.check_files.outputs.files_ok == 'true'
         run: |
           echo "🔧 Configurando Git..."
@@ -132,41 +132,104 @@ jobs:
           echo "📥 Sincronizando con remoto..."
           git fetch origin main
           
+          # Verificar divergencia
           LOCAL=$(git rev-parse HEAD)
           REMOTE=$(git rev-parse origin/main)
           
           if [ "$LOCAL" != "$REMOTE" ]; then
-            echo "⚠️ Detectada divergencia con remoto"
-            git stash --include-untracked
-            git pull --rebase origin main || {
-              git rebase --abort 2>/dev/null || true
-              git reset --hard origin/main
-            }
-            git stash pop || {
-              git checkout --theirs ADAUSD_MODELS/ ADAUSD_1h_data.csv adausd_results.png 2>/dev/null || true
-              git stash drop
+            echo "⚠️ Detectada divergencia - Aplicando cambios remotos primero"
+            
+            # Hacer merge automático de cambios remotos
+            git merge origin/main --no-edit --strategy-option=theirs || {
+              echo "❌ Conflicto en merge - Resolviendo automáticamente"
+              # Si hay conflicto, aceptar versión remota para archivos de código
+              # y nuestra versión para archivos del modelo
+              git checkout --ours ADAUSD_MODELS/ ADAUSD_1h_data.csv adausd_results.png
+              git checkout --theirs '*.py' '*.yml' '*.md' 2>/dev/null || true
+              git add -A
+              git merge --continue --no-edit
             }
           fi
           
-          echo "➕ Agregando archivos..."
-          git add -f ADAUSD_MODELS/ ADAUSD_1h_data.csv adausd_results.png LAST_TRAINING.txt risk_config.json 2>/dev/null || true
+          echo ""
+          echo "➕ Agregando archivos del modelo..."
           
-          if git diff --staged --quiet; then
-            git commit --allow-empty -m "🤖 Model trained [$(date +'%Y-%m-%d %H:%M UTC')]"
-          else
-            git commit -m "🤖 Model trained [$(date +'%Y-%m-%d %H:%M UTC')]"
+          # Agregar archivos FORZADAMENTE (el .gitignore ya está corregido)
+          git add -f ADAUSD_MODELS/
+          git add -f ADAUSD_MODELS/*.pth
+          git add -f ADAUSD_MODELS/*.pkl
+          git add -f ADAUSD_MODELS/*.json
+          git add -f ADAUSD_1h_data.csv
+          git add -f adausd_results.png
+          git add -f LAST_TRAINING.txt
+          git add -f risk_config.json 2>/dev/null || true
+          
+          echo ""
+          echo "📊 Estado actual:"
+          git status --short
+          
+          echo ""
+          echo "📝 Archivos staged:"
+          STAGED_FILES=$(git diff --staged --name-only)
+          echo "$STAGED_FILES"
+          
+          if [ -z "$STAGED_FILES" ]; then
+            echo ""
+            echo "⚠️ NO HAY ARCHIVOS STAGED"
+            echo ""
+            echo "🔍 Diagnóstico:"
+            echo "Archivos del modelo en disco:"
+            ls -lah ADAUSD_MODELS/ 2>/dev/null || echo "  ❌ Carpeta no existe"
+            echo ""
+            echo "Estado de Git:"
+            git status
+            echo ""
+            echo "Archivos ignorados:"
+            git status --ignored | grep ADAUSD || echo "  Ninguno"
+            echo ""
+            exit 1
           fi
           
-          if git push origin main; then
-            echo "✅ Push exitoso"
-          else
-            git push --force-with-lease origin main || {
+          # Contar archivos
+          FILES_COUNT=$(echo "$STAGED_FILES" | wc -l)
+          
+          echo ""
+          echo "💾 Commiteando $FILES_COUNT archivos..."
+          
+          git commit -m "🤖 Model trained [$(date +'%Y-%m-%d %H:%M UTC')]
+
+Files updated: $FILES_COUNT
+- ADAUSD_MODELS/
+- ADAUSD_1h_data.csv
+- adausd_results.png
+
+Training completed successfully"
+          
+          echo ""
+          echo "🚀 Pushing to GitHub..."
+          
+          # Intentar push con retry
+          MAX_RETRIES=3
+          RETRY=0
+          
+          while [ $RETRY -lt $MAX_RETRIES ]; do
+            if git push origin main; then
+              echo "✅ Push exitoso!"
+              exit 0
+            fi
+            
+            RETRY=$((RETRY + 1))
+            
+            if [ $RETRY -lt $MAX_RETRIES ]; then
+              echo "⚠️ Push falló, reintentando ($RETRY/$MAX_RETRIES)..."
+              sleep 2
               git pull --rebase origin main
-              git push origin main
-            }
-          fi
+            fi
+          done
           
-          echo "✅ ¡Modelo guardado exitosamente!"
+          # Si todos los intentos fallaron
+          echo "❌ ERROR: Push falló después de $MAX_RETRIES intentos"
+          exit 1
 
   # ========================================
   # JOB 3: PREDICCIÓN + TRADING (CADA HORA)
@@ -213,7 +276,7 @@ jobs:
             
             if [ "$ORDERS" -gt "0" ]; then
               echo "⚠️ Ya hay $ORDERS orden(es) abierta(s)"
-              echo "⏭️ Saltando predicción (solo 1 orden permitida)"
+              echo "⏸️ Saltando predicción (solo 1 orden permitida)"
               echo "skip_trading=true" >> $GITHUB_OUTPUT
             else
               echo "✅ No hay órdenes abiertas"
@@ -251,7 +314,6 @@ jobs:
           
           git pull --rebase origin main || true
           
-          # ✅ IMPORTANTE: Guardar prediction_tracker.csv
           git add trading_signals.csv \
                   orders_executed.csv \
                   kraken_trades.csv \
@@ -327,7 +389,6 @@ jobs:
           
           git pull --rebase origin main || true
           
-          # ✅ IMPORTANTE: Guardar prediction_tracker.csv actualizado
           git add kraken_trades.csv \
                   open_orders.json \
                   risk_config.json \
