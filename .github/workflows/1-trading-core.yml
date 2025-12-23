@@ -3,8 +3,8 @@ name: 🤖 Trading Bot Core
 on:
   schedule:
     - cron: '0 8 * * *'      # Entrenar diario 9 AM UTC
-    - cron: '*/7 * * * *'      # Predicción + Trading cada hora
-    - cron: '*/4 * * * *'   # Monitoreo cada 15 minutos
+    - cron: '0 * * * *'      # Predicción + Trading cada hora
+    - cron: '*/5 * * * *'   # Monitoreo cada 5 minutos
   
   workflow_dispatch:
     inputs:
@@ -29,27 +29,68 @@ jobs:
   determine-task:
     runs-on: ubuntu-latest
     outputs:
-      run_train: ${{ steps.decide.outputs.run_train }}
-      run_predict: ${{ steps.decide.outputs.run_predict }}
-      run_monitor: ${{ steps.decide.outputs.run_monitor }}
+      should_train: ${{ steps.decide.outputs.should_train }}
+      should_predict: ${{ steps.decide.outputs.should_predict }}
+      should_monitor: ${{ steps.decide.outputs.should_monitor }}
 
     steps:
-      - name: Debug outputs
-        run: |
-            echo "run_train=${{ steps.decide.outputs.run_train }}"
-            echo "run_predict=${{ steps.decide.outputs.run_predict }}"
-            echo "run_monitor=${{ steps.decide.outputs.run_monitor }}"
-
-
-    
       - name: Decide tasks
         id: decide
         run: |
-          # AJUSTA ESTA LÓGICA SI QUIERES, PERO LOS OUTPUTS DEBEN EXISTIR
-          echo "run_train=true" >> $GITHUB_OUTPUT
-          echo "run_predict=true" >> $GITHUB_OUTPUT
-          echo "run_monitor=true" >> $GITHUB_OUTPUT
-
+          HOUR=$(date -u +%H)
+          
+          # Por defecto todas en false
+          TRAIN="false"
+          PREDICT="false"
+          MONITOR="false"
+          
+          # Lógica basada en schedule o manual
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            case "${{ github.event.inputs.task }}" in
+              "train")
+                TRAIN="true"
+                ;;
+              "predict")
+                PREDICT="true"
+                ;;
+              "monitor")
+                MONITOR="true"
+                ;;
+              "all")
+                TRAIN="true"
+                PREDICT="true"
+                MONITOR="true"
+                ;;
+            esac
+          else
+            # Schedule automático
+            # Entrenar solo a las 08:00 UTC
+            if [ "$HOUR" = "08" ]; then
+              TRAIN="true"
+            fi
+            
+            # Predicción cada hora
+            if [ "${{ github.event.schedule }}" = "0 * * * *" ]; then
+              PREDICT="true"
+            fi
+            
+            # Monitoreo cada 15 min
+            if [ "${{ github.event.schedule }}" = "*/15 * * * *" ]; then
+              MONITOR="true"
+            fi
+          fi
+          
+          # Outputs
+          echo "should_train=$TRAIN" >> $GITHUB_OUTPUT
+          echo "should_predict=$PREDICT" >> $GITHUB_OUTPUT
+          echo "should_monitor=$MONITOR" >> $GITHUB_OUTPUT
+      
+      - name: Debug outputs
+        run: |
+          echo "🔍 Decisiones tomadas:"
+          echo "should_train=${{ steps.decide.outputs.should_train }}"
+          echo "should_predict=${{ steps.decide.outputs.should_predict }}"
+          echo "should_monitor=${{ steps.decide.outputs.should_monitor }}"
 
   train-model:
     needs: determine-task
@@ -57,7 +98,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - name: 📥 Checkout
+      - name: 🔥 Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -164,7 +205,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: 📥 Checkout
+      - name: 🔥 Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -243,7 +284,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: 📥 Checkout
+      - name: 🔥 Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -305,7 +346,7 @@ jobs:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          MSG="ERROR in Trading Bot at $(date +'%Y-%m-%d %H:%M UTC')"
+          MSG="❌ ERROR in Trading Bot at $(date +'%Y-%m-%d %H:%M UTC')"
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
             -d chat_id="${CHAT_ID}" \
             -d text="$MSG"
