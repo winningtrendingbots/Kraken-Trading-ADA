@@ -2,14 +2,14 @@ name: 🌐 Dashboard Sync
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Cada 15 minutos
+    - cron: '*/15 * * * *'
   
   push:
     paths:
       - 'kraken_trades.csv'
       - 'trading_signals.csv'
       - 'orders_executed.csv'
-      - 'prediction_tracker.csv'  # ✅ NUEVO
+      - 'prediction_tracker.csv'
       - 'adausd_results.png'
       - 'trading_analytics.png'
   
@@ -27,13 +27,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: 📥 Checkout Kraken-Trading (repo actual)
+      - name: 📥 Checkout Kraken-Trading
         uses: actions/checkout@v4
         with:
           path: trading
           fetch-depth: 1
       
-      - name: 📥 Checkout winningtrendingbots.github.io (dashboard)
+      - name: 📥 Checkout Dashboard
         uses: actions/checkout@v4
         with:
           repository: winningtrendingbots/winningtrendingbots.github.io
@@ -41,99 +41,61 @@ jobs:
           path: dashboard
           fetch-depth: 1
       
-      - name: 📂 Verificar archivos en trading
+      - name: 📂 Verificar archivos
         id: check_files
         run: |
-          echo "📂 Archivos disponibles:"
           cd trading
-          
           files_found=0
           
-          if [ -f "kraken_trades.csv" ]; then
-            echo "✅ kraken_trades.csv"
-            files_found=$((files_found + 1))
-          fi
-          
-          if [ -f "trading_signals.csv" ]; then
-            echo "✅ trading_signals.csv"
-            files_found=$((files_found + 1))
-          fi
-          
-          if [ -f "orders_executed.csv" ]; then
-            echo "✅ orders_executed.csv"
-            files_found=$((files_found + 1))
-          fi
-          
-          # ✅ NUEVO: Verificar prediction_tracker.csv
-          if [ -f "prediction_tracker.csv" ]; then
-            echo "✅ prediction_tracker.csv"
-            files_found=$((files_found + 1))
-          fi
-          
-          if [ -f "adausd_results.png" ]; then
-            echo "✅ adausd_results.png"
-            files_found=$((files_found + 1))
-          fi
-          
-          if [ -f "trading_analytics.png" ]; then
-            echo "✅ trading_analytics.png"
-            files_found=$((files_found + 1))
-          fi
+          [ -f "kraken_trades.csv" ] && files_found=$((files_found + 1))
+          [ -f "trading_signals.csv" ] && files_found=$((files_found + 1))
+          [ -f "orders_executed.csv" ] && files_found=$((files_found + 1))
+          [ -f "prediction_tracker.csv" ] && files_found=$((files_found + 1))
+          [ -f "adausd_results.png" ] && files_found=$((files_found + 1))
+          [ -f "trading_analytics.png" ] && files_found=$((files_found + 1))
           
           echo "has_files=$files_found" >> $GITHUB_OUTPUT
           echo "Total: $files_found archivos"
       
-      - name: 🗂️ Crear estructura en dashboard
+      - name: 🗂️ Crear estructura
         if: steps.check_files.outputs.has_files > 0
         run: |
           cd dashboard
           mkdir -p data images
-          echo "✅ Estructura creada"
       
-      - name: 📋 Copiar archivos CSV
+      - name: 📋 Copiar archivos
         if: steps.check_files.outputs.has_files > 0
         run: |
-          # CSV files
-          [ -f "trading/kraken_trades.csv" ] && cp trading/kraken_trades.csv dashboard/data/ && echo "✅ Copied kraken_trades.csv"
-          [ -f "trading/trading_signals.csv" ] && cp trading/trading_signals.csv dashboard/data/ && echo "✅ Copied trading_signals.csv"
-          [ -f "trading/orders_executed.csv" ] && cp trading/orders_executed.csv dashboard/data/ && echo "✅ Copied orders_executed.csv"
-          
-          # ✅ NUEVO: Copiar prediction_tracker.csv
-          [ -f "trading/prediction_tracker.csv" ] && cp trading/prediction_tracker.csv dashboard/data/ && echo "✅ Copied prediction_tracker.csv"
-          
-          [ -f "trading/open_orders.json" ] && cp trading/open_orders.json dashboard/data/ && echo "✅ Copied open_orders.json"
-          [ -f "trading/risk_config.json" ] && cp trading/risk_config.json dashboard/data/ && echo "✅ Copied risk_config.json"
-          
-          # Images
-          [ -f "trading/adausd_results.png" ] && cp trading/adausd_results.png dashboard/images/ && echo "✅ Copied adausd_results.png"
-          [ -f "trading/trading_analytics.png" ] && cp trading/trading_analytics.png dashboard/images/ && echo "✅ Copied trading_analytics.png"
-          
-          echo "📋 Archivos copiados"
+          [ -f "trading/kraken_trades.csv" ] && cp trading/kraken_trades.csv dashboard/data/
+          [ -f "trading/trading_signals.csv" ] && cp trading/trading_signals.csv dashboard/data/
+          [ -f "trading/orders_executed.csv" ] && cp trading/orders_executed.csv dashboard/data/
+          [ -f "trading/prediction_tracker.csv" ] && cp trading/prediction_tracker.csv dashboard/data/
+          [ -f "trading/open_orders.json" ] && cp trading/open_orders.json dashboard/data/
+          [ -f "trading/risk_config.json" ] && cp trading/risk_config.json dashboard/data/
+          [ -f "trading/adausd_results.png" ] && cp trading/adausd_results.png dashboard/images/
+          [ -f "trading/trading_analytics.png" ] && cp trading/trading_analytics.png dashboard/images/
       
-      - name: 📊 Generar metadata.json
+      - name: 📊 Generar metadata
         if: steps.check_files.outputs.has_files > 0
         run: |
           cd dashboard
           
-          # Contar líneas en CSVs
           TRADES=0
           SIGNALS=0
           ORDERS=0
-          PREDICTIONS=0  # ✅ NUEVO
+          PREDICTIONS=0
           
           [ -f "data/kraken_trades.csv" ] && TRADES=$(tail -n +2 data/kraken_trades.csv | wc -l)
           [ -f "data/trading_signals.csv" ] && SIGNALS=$(tail -n +2 data/trading_signals.csv | wc -l)
           [ -f "data/orders_executed.csv" ] && ORDERS=$(tail -n +2 data/orders_executed.csv | wc -l)
           [ -f "data/prediction_tracker.csv" ] && PREDICTIONS=$(tail -n +2 data/prediction_tracker.csv | wc -l)
           
-          # Verificar imágenes
           HAS_MODEL="false"
           HAS_ANALYTICS="false"
           [ -f "images/adausd_results.png" ] && HAS_MODEL="true"
           [ -f "images/trading_analytics.png" ] && HAS_ANALYTICS="true"
           
-          # Crear metadata
-          cat > data/metadata.json << EOF
+          cat > data/metadata.json <<METAEOF
 {
   "last_sync": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
   "sync_source": "github-actions",
@@ -150,9 +112,9 @@ jobs:
     "analytics": $HAS_ANALYTICS
   }
 }
-EOF
+METAEOF
           
-          echo "📊 metadata.json generado"
+          echo "Metadata generado:"
           cat data/metadata.json
       
       - name: 🌐 Verificar index.html
@@ -161,9 +123,7 @@ EOF
           cd dashboard
           
           if [ ! -f "index.html" ]; then
-            echo "⚠️ No existe index.html, se creará uno básico"
-            
-            cat > index.html << 'HTMLEOF'
+            cat > index.html <<'INDEXEOF'
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -282,7 +242,7 @@ EOF
             <p>Última actualización: <span id="lastUpdate">Cargando...</span></p>
             <p style="margin-top: 10px;">
                 <span class="new-badge">NEW</span> 
-                Ahora con 4 decimales en predicciones y tracking unificado
+                Con 4 decimales en predicciones y tracking unificado
             </p>
         </div>
     </div>
@@ -300,11 +260,7 @@ EOF
     </script>
 </body>
 </html>
-HTMLEOF
-            
-            echo "✅ index.html básico creado"
-          else
-            echo "✅ index.html ya existe (no se modifica)"
+INDEXEOF
           fi
       
       - name: 💾 Commit y push
@@ -318,26 +274,20 @@ HTMLEOF
           git add data/ images/ index.html 2>/dev/null || true
           
           if git diff --staged --quiet; then
-            echo "ℹ️ No hay cambios"
+            echo "No hay cambios"
           else
             TRADES=0
             PREDICTIONS=0
             [ -f data/kraken_trades.csv ] && TRADES=$(tail -n +2 data/kraken_trades.csv | wc -l)
             [ -f data/prediction_tracker.csv ] && PREDICTIONS=$(tail -n +2 data/prediction_tracker.csv | wc -l)
             
-            git commit -m "🌐 Dashboard sync [$(date +'%Y-%m-%d %H:%M UTC')] T:$TRADES P:$PREDICTIONS"
+            git commit -m "Dashboard sync [$(date +'%Y-%m-%d %H:%M UTC')] T:$TRADES P:$PREDICTIONS"
             git push origin main
             
-            echo "✅ Dashboard sincronizado"
-            echo ""
-            echo "╔════════════════════════════════════╗"
-            echo "  🌐 DASHBOARD ACTUALIZADO"
-            echo "╚════════════════════════════════════╝"
-            echo "URL: https://winningtrendingbots.github.io/"
-            echo "╚════════════════════════════════════╝"
+            echo "Dashboard sincronizado"
           fi
       
-      - name: 📱 Notificar sincronización
+      - name: 📱 Notificar
         if: always() && steps.check_files.outputs.has_files > 0
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
@@ -345,12 +295,8 @@ HTMLEOF
         run: |
           URL="https://winningtrendingbots.github.io/"
           
-          MSG="🌐 *Dashboard Sync*%0A%0A"
-          MSG="${MSG}✅ Sincronizado: ${{ steps.check_files.outputs.has_files }} archivos%0A"
-          MSG="${MSG}📅 $(date +'%Y-%m-%d %H:%M UTC')%0A%0A"
-          MSG="${MSG}🔗 ${URL}"
+          MSG="Dashboard Sync - OK"
           
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
             -d chat_id="${CHAT_ID}" \
-            -d text="${MSG}" \
-            -d parse_mode="Markdown" || echo "⚠️ Telegram notification failed"
+            -d text="$MSG" || echo "Telegram failed"
