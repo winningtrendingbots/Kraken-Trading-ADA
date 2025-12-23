@@ -148,18 +148,62 @@ def get_balance():
     result = kraken_request('/0/private/Balance', data)
     return result
 
+# 🔧 REEMPLAZO PARA kraken_trader.py
+# Busca la función get_margin_balance() y reemplázala con esto:
+
 def get_margin_balance():
-    """Obtiene balance de MARGIN WALLET"""
+    """
+    ✅ VERSIÓN CORREGIDA: Obtiene balance de Derivatives Wallet
+    Usa TradeBalance que detecta USD, EUR, etc. automáticamente
+    """
     print("\n" + "="*70)
-    print("  💰 OBTENIENDO BALANCE DE MARGIN WALLET")
+    print("  💰 OBTENIENDO BALANCE DE DERIVATIVES WALLET")
     print("="*70)
     
-    balance = get_balance()
+    # 🆕 Usar TradeBalance en lugar de Balance
+    data = {'nonce': str(int(1000*time.time()))}
+    result = kraken_request('/0/private/TradeBalance', data)
+    
+    if 'result' in result:
+        # Extraer datos clave
+        equity = float(result['result'].get('eb', 0))          # Balance total (equity)
+        margin_used = float(result['result'].get('m', 0))      # Margen usado
+        free_margin = float(result['result'].get('mf', 0))     # Margen libre (disponible)
+        
+        # Detectar moneda (Kraken devuelve en la moneda base de la cuenta)
+        # Por defecto asume USD si tienes > 0
+        currency = "USD" if equity > 0.1 else "EUR"
+        
+        print(f"\n📊 Detalles de la cuenta:")
+        print(f"   💰 Equity Total: ${equity:.2f} {currency}")
+        print(f"   📊 Margen Usado: ${margin_used:.2f} {currency}")
+        print(f"   ✅ Margen Libre: ${free_margin:.2f} {currency}")
+        
+        # 🎯 Retornar margen libre (lo que podemos usar)
+        if free_margin > 0:
+            print(f"\n✅ Balance disponible para trading: ${free_margin:.2f} {currency}")
+            return free_margin
+        else:
+            print(f"\n⚠️ NO HAY FONDOS DISPONIBLES")
+            print(f"\n📋 SOLUCIÓN:")
+            print(f"   1. Ve a Kraken.com → Funding → Transfer")
+            print(f"   2. Transfiere de Spot Wallet → Derivatives Wallet")
+            print(f"   3. Mínimo: 10 USD/EUR para trading con leverage")
+            return 0
+    
+    print("\n❌ Error obteniendo balance de TradeBalance")
+    
+    # Fallback: intentar con Balance normal
+    print("\n🔄 Intentando con Balance endpoint...")
+    data = {'nonce': str(int(1000*time.time()))}
+    balance = kraken_request('/0/private/Balance', data)
     
     if 'result' in balance:
-        margin_symbols = ['ZUSD', 'USD', 'ZEUR', 'EUR', 'USDT']
+        # Buscar cualquier símbolo USD o EUR
+        usd_symbols = ['ZUSD', 'USD', 'USDT', 'USDC']
+        eur_symbols = ['ZEUR', 'EUR']
         
-        total_margin = 0
+        total = 0
         
         print("\n📊 Balances detectados:")
         for asset, amount in balance['result'].items():
@@ -167,31 +211,14 @@ def get_margin_balance():
             if amount_float > 0:
                 print(f"   {asset}: {amount_float:.2f}")
                 
-                if asset in margin_symbols:
-                    total_margin += amount_float
+                if asset in usd_symbols or asset in eur_symbols:
+                    total += amount_float
         
-        if total_margin > 0:
-            print(f"\n✅ Balance total en Margin Wallet: ${total_margin:.2f}")
-            return total_margin
+        if total > 0:
+            print(f"\n✅ Balance total: ${total:.2f}")
+            return total
         else:
-            print("\n⚠️ NO HAY FONDOS EN MARGIN WALLET")
-            print("\n📋 SOLUCIÓN:")
-            print("   1. Ve a Kraken.com → Funding → Transfer")
-            print("   2. Transfiere de Spot Wallet → Margin Wallet")
-            print("   3. Mínimo: 10 EUR/USD para trading con leverage")
-            print()
-            
-            spot_balance = 0
-            for asset, amount in balance['result'].items():
-                if asset not in margin_symbols:
-                    amount_float = float(amount)
-                    if amount_float > 0:
-                        spot_balance += amount_float
-            
-            if spot_balance > 0:
-                print(f"   ℹ️ Tienes ~${spot_balance:.2f} en otras carteras")
-                print(f"   → Transfiérelos a Margin Wallet para usar leverage")
-            
+            print("\n⚠️ No se encontraron fondos")
             return 0
     
     print("❌ Error obteniendo balance")
