@@ -1,8 +1,8 @@
-name: 🔮 Predict & Trade
+name: Predict & Trade
 
 on:
   schedule:
-    - cron: '*/10 * * * *'  # Cada 10 minutos
+    - cron: '*/5 * * * *'  # Cada 5 minutos
   workflow_dispatch:
 
 permissions:
@@ -13,42 +13,42 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: 📥 Checkout
+      - name: Checkout
         uses: actions/checkout@v4
       
-      - name: 🔍 Check if model exists
+      - name: Check if model exists
         id: check
         run: |
           if [ -d "ADAUSD_MODELS" ] && [ "$(ls -A ADAUSD_MODELS/*.keras 2>/dev/null)" ]; then
-            echo "✅ Modelo encontrado"
+            echo "Modelo encontrado"
             echo "has_model=true" >> $GITHUB_OUTPUT
           else
-            echo "⚠️ No hay modelo entrenado aún"
+            echo "No hay modelo entrenado aun"
             echo "has_model=false" >> $GITHUB_OUTPUT
           fi
       
-      - name: ⏳ Wait for model
+      - name: Wait for model
         if: steps.check.outputs.has_model == 'false'
         run: |
-          echo "⏳ Esperando entrenamiento del modelo..."
-          echo "El modelo se entrena automáticamente 1 vez al día"
+          echo "Esperando entrenamiento del modelo..."
+          echo "El modelo se entrena automaticamente 1 vez al dia"
           echo "O puedes ejecutar manualmente el workflow 'Train Model'"
           exit 0
       
-      - name: 🐍 Setup Python
+      - name: Setup Python
         if: steps.check.outputs.has_model == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
       
-      - name: 📦 Install dependencies
+      - name: Install dependencies
         if: steps.check.outputs.has_model == 'true'
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: 🔮 Generate predictions
+      - name: Generate predictions
         if: steps.check.outputs.has_model == 'true'
         env:
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
@@ -56,11 +56,11 @@ jobs:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          echo "🔮 Generando predicciones con LSTM..."
+          echo "Generando predicciones con LSTM..."
           python predict_and_filter.py
-          echo "✅ Predicciones generadas"
+          echo "Predicciones generadas"
       
-      - name: 💼 Execute trades
+      - name: Execute trades
         if: steps.check.outputs.has_model == 'true'
         env:
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
@@ -68,40 +68,39 @@ jobs:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          echo "💼 Ejecutando estrategia de trading..."
+          echo "Ejecutando estrategia de trading..."
           python trading_orchestrator.py
-          echo "✅ Ciclo de trading completado"
+          echo "Ciclo de trading completado"
       
-      - name: 💾 Save signals and orders
+      - name: Save signals and orders
         if: steps.check.outputs.has_model == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Agregar archivos de señales y órdenes
           git add trading_signals.csv orders_executed.csv *.json 2>/dev/null || true
           
           if git diff --staged --quiet; then
-            echo "ℹ️ No hay nuevas señales/órdenes"
+            echo "No hay nuevas senales/ordenes"
           else
             timestamp=$(date -u +%H:%M)
-            git commit -m "🔮 Trading cycle $timestamp UTC"
+            git commit -m "Trading cycle $timestamp UTC"
             git push
-            echo "✅ Señales y órdenes guardadas"
+            echo "Senales y ordenes guardadas"
           fi
       
-      - name: 📊 Cycle summary
+      - name: Cycle summary
         if: always()
         run: |
           echo ""
-          echo "════════════════════════════════════"
+          echo "===================================="
           if [ "${{ steps.check.outputs.has_model }}" = "true" ]; then
-            echo "✅ Ciclo completado exitosamente"
+            echo "Ciclo completado exitosamente"
             echo "   - Predicciones generadas"
             echo "   - Estrategia ejecutada"
             echo "   - Datos guardados"
           else
-            echo "⏳ Esperando modelo inicial"
+            echo "Esperando modelo inicial"
             echo "   Ejecuta 'Train Model' primero"
           fi
-          echo "════════════════════════════════════"
+          echo "===================================="
