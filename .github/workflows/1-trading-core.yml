@@ -1,10 +1,10 @@
-name: 🤖 Trading Bot - 5 Minutos
+name: 🤖 Trading Bot Core
 
 on:
   schedule:
     - cron: '0 8 * * *'      # Entrenar diario 9 AM UTC
-    - cron: '*/5 * * * *'    # 🆕 Predicción + Trading CADA 5 MINUTOS
-    - cron: '*/10 * * * *'   # Monitoreo cada 15 minutos
+    - cron: '0 * * * *'      # Predicción + Trading cada hora
+    - cron: '*/15 * * * *'   # Monitoreo cada 15 minutos
   
   workflow_dispatch:
     inputs:
@@ -22,7 +22,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: trading-${{ github.event.inputs.task || 'auto' }}
+  group: trading-${{ github.event.schedule || github.event.inputs.task || 'auto' }}
   cancel-in-progress: false
 
 jobs:
@@ -45,14 +45,13 @@ jobs:
           echo "⏰ Schedule: $SCHEDULE"
           
           # Lógica de ejecución
-          if [[ "$SCHEDULE" == "0 9 * * *" ]] || [[ "$TASK" == "train" ]] || [[ "$TASK" == "all" ]]; then
+          if [[ "$SCHEDULE" == "0 8 * * *" ]] || [[ "$TASK" == "train" ]] || [[ "$TASK" == "all" ]]; then
             echo "should_train=true" >> $GITHUB_OUTPUT
           else
             echo "should_train=false" >> $GITHUB_OUTPUT
           fi
           
-          # 🆕 Predicción + Trading cada 5 minutos
-          if [[ "$SCHEDULE" == "*/5 * * * *" ]] || [[ "$TASK" == "predict" ]] || [[ "$TASK" == "all" ]]; then
+          if [[ "$SCHEDULE" == "0 * * * *" ]] || [[ "$TASK" == "predict" ]] || [[ "$TASK" == "all" ]]; then
             echo "should_predict=true" >> $GITHUB_OUTPUT
           else
             echo "should_predict=false" >> $GITHUB_OUTPUT
@@ -68,7 +67,6 @@ jobs:
 
   # ========================================
   # JOB 2: ENTRENAR MODELO (1 VEZ AL DÍA)
-  # 🆕 CON MANEJO MEJORADO DE CONFLICTOS
   # ========================================
   train-model:
     needs: determine-task
@@ -95,7 +93,6 @@ jobs:
       - name: 🧠 Entrenar modelo LSTM
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "🔧 Iniciando entrenamiento..."
@@ -123,15 +120,9 @@ jobs:
             files_ok=false
           fi
           
-          if [ -f "adausd_results.png" ]; then
-            echo "✅ adausd_results.png generado"
-          else
-            echo "⚠️ adausd_results.png NO generado (no crítico)"
-          fi
-          
           echo "files_ok=$files_ok" >> $GITHUB_OUTPUT
       
-      - name: 💾 Guardar modelo y archivos (CON MANEJO DE CONFLICTOS)
+      - name: 💾 Guardar modelo (CON MANEJO DE CONFLICTOS)
         if: steps.check_files.outputs.files_ok == 'true'
         run: |
           echo "🔧 Configurando Git..."
@@ -139,122 +130,46 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           echo "📥 Sincronizando con remoto..."
-          # Fetch primero para ver el estado
           git fetch origin main
           
-          # Ver si hay divergencia
           LOCAL=$(git rev-parse HEAD)
           REMOTE=$(git rev-parse origin/main)
           
           if [ "$LOCAL" != "$REMOTE" ]; then
             echo "⚠️ Detectada divergencia con remoto"
-            echo "   Local:  $LOCAL"
-            echo "   Remote: $REMOTE"
-            
-            # Stash cambios actuales
-            echo "📦 Guardando cambios temporalmente..."
             git stash --include-untracked
-            
-            # Pull del remoto
-            echo "📥 Obteniendo cambios remotos..."
             git pull --rebase origin main || {
-              echo "❌ Error en pull, intentando reset..."
               git rebase --abort 2>/dev/null || true
               git reset --hard origin/main
             }
-            
-            # Aplicar nuestros cambios encima
-            echo "📤 Aplicando nuestros cambios..."
             git stash pop || {
-              echo "⚠️ Conflicto al aplicar stash, forzando nuestros cambios..."
               git checkout --theirs ADAUSD_MODELS/ ADAUSD_1h_data.csv adausd_results.png 2>/dev/null || true
               git stash drop
             }
-          else
-            echo "✅ Repo sincronizado con remoto"
           fi
           
-          echo ""
           echo "➕ Agregando archivos..."
+          git add -f ADAUSD_MODELS/ ADAUSD_1h_data.csv adausd_results.png LAST_TRAINING.txt risk_config.json 2>/dev/null || true
           
-          # Agregar forzadamente los archivos del modelo
-          git add -f ADAUSD_MODELS/ 2>/dev/null || echo "⚠️ ADAUSD_MODELS/ no añadido"
-          git add -f ADAUSD_1h_data.csv 2>/dev/null || echo "⚠️ CSV no añadido"
-          git add -f adausd_results.png 2>/dev/null || echo "⚠️ PNG no añadido"
-          git add -f LAST_TRAINING.txt 2>/dev/null || true
-          git add -f risk_config.json 2>/dev/null || true
-          
-          echo ""
-          echo "📋 Estado de Git:"
-          git status --short
-          
-          echo ""
-          echo "💾 Commiteando..."
-          
-          # Siempre commitear, incluso si no hay cambios visibles
           if git diff --staged --quiet; then
-            echo "⚠️ No hay cambios staged, creando commit con --allow-empty"
             git commit --allow-empty -m "🤖 Model trained [$(date +'%Y-%m-%d %H:%M UTC')]"
           else
-            echo "✅ Cambios detectados, commiteando..."
-            
-            # Contar archivos cambiados
-            FILES_CHANGED=$(git diff --staged --name-only | wc -l)
-            
-            git commit -m "🤖 Model trained [$(date +'%Y-%m-%d %H:%M UTC')]
-
-Files updated: $FILES_CHANGED
-- ADAUSD_MODELS/
-- ADAUSD_1h_data.csv
-- adausd_results.png
-"
+            git commit -m "🤖 Model trained [$(date +'%Y-%m-%d %H:%M UTC')]"
           fi
           
-          echo ""
-          echo "📤 Pushing a remoto..."
-          
-          # Intentar push normal primero
           if git push origin main; then
-            echo "✅ Push exitoso (normal)"
+            echo "✅ Push exitoso"
           else
-            echo "⚠️ Push normal falló, intentando con --force-with-lease..."
-            
-            # Force con protección (solo si nuestro commit es más reciente)
-            if git push --force-with-lease origin main; then
-              echo "✅ Push exitoso (force-with-lease)"
-            else
-              echo "❌ Push falló incluso con force-with-lease"
-              echo "🔄 Último intento: pull + push..."
-              
-              git pull --rebase origin main || git rebase --abort
-              
-              # Intentar una vez más
-              git push origin main || {
-                echo "❌ ERROR: No se pudo hacer push después de múltiples intentos"
-                echo "📋 Logs para debugging:"
-                git log --oneline -5
-                exit 1
-              }
-            fi
+            git push --force-with-lease origin main || {
+              git pull --rebase origin main
+              git push origin main
+            }
           fi
           
-          echo ""
           echo "✅ ¡Modelo guardado exitosamente!"
-      
-      - name: 📦 Backup artifacts (por seguridad)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: training-backup-${{ github.run_number }}
-          path: |
-            ADAUSD_MODELS/
-            ADAUSD_1h_data.csv
-            adausd_results.png
-            LAST_TRAINING.txt
-          retention-days: 7
 
   # ========================================
-  # JOB 3: PREDICCIÓN + TRADING (CADA 5 MIN)
+  # JOB 3: PREDICCIÓN + TRADING (CADA HORA)
   # ========================================
   predict-and-trade:
     needs: [determine-task, train-model]
@@ -285,7 +200,6 @@ Files updated: $FILES_CHANGED
         run: |
           if [ ! -d "ADAUSD_MODELS" ]; then
             echo "❌ ERROR: No existe ADAUSD_MODELS/"
-            echo "🔧 Ejecuta primero: workflow_dispatch → train"
             exit 1
           fi
           echo "✅ Modelo encontrado"
@@ -299,14 +213,14 @@ Files updated: $FILES_CHANGED
             
             if [ "$ORDERS" -gt "0" ]; then
               echo "⚠️ Ya hay $ORDERS orden(es) abierta(s)"
-              echo "⏭️ Saltando predicción y trading (solo 1 orden permitida)"
+              echo "⏭️ Saltando predicción (solo 1 orden permitida)"
               echo "skip_trading=true" >> $GITHUB_OUTPUT
             else
-              echo "✅ No hay órdenes abiertas, procediendo..."
+              echo "✅ No hay órdenes abiertas"
               echo "skip_trading=false" >> $GITHUB_OUTPUT
             fi
           else
-            echo "✅ No hay archivo de órdenes, procediendo..."
+            echo "✅ No hay archivo de órdenes"
             echo "skip_trading=false" >> $GITHUB_OUTPUT
           fi
       
@@ -314,17 +228,15 @@ Files updated: $FILES_CHANGED
         if: steps.check_order.outputs.skip_trading != 'true'
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          echo "🔮 Generando predicción con datos de 1 hora..."
+          echo "🔮 Generando predicción con 4 decimales..."
           python predict_and_filter.py
       
       - name: 💼 Ejecutar trading
         if: steps.check_order.outputs.skip_trading != 'true'
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
           KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
@@ -332,14 +244,20 @@ Files updated: $FILES_CHANGED
           echo "💼 Ejecutando trading..."
           python kraken_trader.py
       
-      - name: 💾 Guardar señales y órdenes
+      - name: 💾 Guardar señales y prediction_tracker
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           git pull --rebase origin main || true
           
-          git add trading_signals.csv orders_executed.csv kraken_trades.csv open_orders.json risk_config.json 2>/dev/null || true
+          # ✅ IMPORTANTE: Guardar prediction_tracker.csv
+          git add trading_signals.csv \
+                  orders_executed.csv \
+                  kraken_trades.csv \
+                  open_orders.json \
+                  risk_config.json \
+                  prediction_tracker.csv 2>/dev/null || true
           
           if git diff --staged --quiet; then
             echo "ℹ️ No hay cambios"
@@ -351,7 +269,7 @@ Files updated: $FILES_CHANGED
             
             git commit -m "📊 Trading [$(date +'%H:%M UTC')] Signal: $SIGNAL"
             git push origin main
-            echo "✅ Datos guardados"
+            echo "✅ Datos guardados (incluido prediction_tracker.csv)"
           fi
 
   # ========================================
@@ -379,15 +297,14 @@ Files updated: $FILES_CHANGED
           pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: 🔍 Monitorear órdenes cada 15 min
+      - name: 🔍 Monitorear órdenes
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
           KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
         run: |
-          echo "🔍 Monitoreando órdenes abiertas (cada 15 min)..."
+          echo "🔍 Monitoreando órdenes abiertas..."
           
           if [ ! -f "open_orders.json" ]; then
             echo "ℹ️ No hay órdenes abiertas"
@@ -395,7 +312,6 @@ Files updated: $FILES_CHANGED
           fi
           
           ORDERS=$(cat open_orders.json | grep -c "txid" || echo "0")
-          echo "📊 Órdenes abiertas: $ORDERS"
           
           if [ "$ORDERS" -eq "0" ]; then
             echo "ℹ️ No hay órdenes para monitorear"
@@ -411,7 +327,11 @@ Files updated: $FILES_CHANGED
           
           git pull --rebase origin main || true
           
-          git add kraken_trades.csv open_orders.json risk_config.json 2>/dev/null || true
+          # ✅ IMPORTANTE: Guardar prediction_tracker.csv actualizado
+          git add kraken_trades.csv \
+                  open_orders.json \
+                  risk_config.json \
+                  prediction_tracker.csv 2>/dev/null || true
           
           if git diff --staged --quiet; then
             echo "ℹ️ No hay cambios"
@@ -423,49 +343,30 @@ Files updated: $FILES_CHANGED
             
             git commit -m "🔍 Monitor [$(date +'%H:%M UTC')] Closed: $CLOSED"
             git push origin main
-            echo "✅ Estado actualizado"
+            echo "✅ Estado actualizado (incluido prediction_tracker.csv)"
           fi
 
   # ========================================
-  # JOB 5: NOTIFICACIÓN FINAL
+  # JOB 5: NOTIFICACIÓN FINAL (SOLO SI HAY ERROR)
   # ========================================
   notify-completion:
     needs: [determine-task, train-model, predict-and-trade, monitor-orders]
-    if: always()
+    if: failure()
     runs-on: ubuntu-latest
     steps:
-      - name: 📱 Enviar resumen
+      - name: 📱 Enviar notificación de error
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          STATUS="✅"
-          
-          if [[ "${{ needs.train-model.result }}" == "failure" ]]; then
-            STATUS="❌ Training failed"
-          elif [[ "${{ needs.predict-and-trade.result }}" == "failure" ]]; then
-            STATUS="❌ Trading failed"
-          elif [[ "${{ needs.monitor-orders.result }}" == "failure" ]]; then
-            STATUS="❌ Monitor failed"
-          else
-            STATUS="✅ All OK"
-          fi
-          
-          MSG="🤖 *Trading Bot - 5min*%0A%0A"
-          MSG="${MSG}Status: ${STATUS}%0A"
+          MSG="❌ *Trading Bot - ERROR*%0A%0A"
           MSG="${MSG}Time: $(date +'%Y-%m-%d %H:%M UTC')%0A%0A"
           
-          [[ "${{ needs.determine-task.outputs.should_train }}" == "true" ]] && MSG="${MSG}🧠 Training: ${{ needs.train-model.result }}%0A"
-          [[ "${{ needs.determine-task.outputs.should_predict }}" == "true" ]] && MSG="${MSG}🔮 Prediction: ${{ needs.predict-and-trade.result }}%0A"
-          [[ "${{ needs.determine-task.outputs.should_monitor }}" == "true" ]] && MSG="${MSG}🔍 Monitor: ${{ needs.monitor-orders.result }}%0A"
+          [[ "${{ needs.train-model.result }}" == "failure" ]] && MSG="${MSG}🧠 Training: FAILED%0A"
+          [[ "${{ needs.predict-and-trade.result }}" == "failure" ]] && MSG="${MSG}🔮 Prediction: FAILED%0A"
+          [[ "${{ needs.monitor-orders.result }}" == "failure" ]] && MSG="${MSG}🔍 Monitor: FAILED%0A"
           
-          # Solo enviar si hay fallo o si es ejecución manual
-          if [[ "${STATUS}" == *"failed"* ]] || [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
-              -d chat_id="${TELEGRAM_CHAT_ID}" \
-              -d text="${MSG}" \
-              -d parse_mode="Markdown" || echo "⚠️ Telegram notification failed"
-          else
-            echo "✅ Todo OK - No se envía notificación (reducir spam)"
-          fi
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
+            -d chat_id="${CHAT_ID}" \
+            -d text="${MSG}" \
+            -d parse_mode="Markdown"
