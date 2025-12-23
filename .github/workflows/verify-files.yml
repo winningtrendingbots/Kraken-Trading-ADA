@@ -1,0 +1,85 @@
+name: 🔍 Verify Model Files
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      
+      - name: 🔍 Verificar archivos del modelo
+        run: |
+          echo "="*70
+          echo "  🔍 VERIFICACIÓN DE ARCHIVOS DEL MODELO"
+          echo "="*70
+          echo ""
+          
+          echo "📂 ESTRUCTURA DEL REPOSITORIO:"
+          tree -L 2 || ls -lah
+          
+          echo ""
+          echo "📁 CONTENIDO DE ADAUSD_MODELS:"
+          if [ -d "ADAUSD_MODELS" ]; then
+            ls -lah ADAUSD_MODELS/
+            echo ""
+            echo "✅ Carpeta ADAUSD_MODELS existe"
+            
+            # Verificar cada archivo
+            for file in adausd_lstm_1h.pth config_1h.json scaler_input_1h.pkl scaler_output_1h.pkl training_summary.json; do
+              if [ -f "ADAUSD_MODELS/$file" ]; then
+                size=$(du -h "ADAUSD_MODELS/$file" | cut -f1)
+                modified=$(stat -c %y "ADAUSD_MODELS/$file")
+                echo "   ✅ $file ($size) - Modificado: $modified"
+              else
+                echo "   ❌ $file NO EXISTE"
+              fi
+            done
+          else
+            echo "❌ Carpeta ADAUSD_MODELS NO existe"
+          fi
+          
+          echo ""
+          echo "📊 ÚLTIMO COMMIT:"
+          git log -1 --pretty=format:"Commit: %h%nAutor: %an%nFecha: %ad%nMensaje: %s%n" --date=format:'%Y-%m-%d %H:%M:%S'
+          
+          echo ""
+          echo "📝 ARCHIVOS EN EL ÚLTIMO COMMIT:"
+          git show --name-status --pretty="" HEAD | head -20
+          
+          echo ""
+          echo "🔍 HISTORIAL DE ADAUSD_MODELS:"
+          git log --oneline --all -- ADAUSD_MODELS/ | head -5
+      
+      - name: 📱 Enviar reporte
+        if: always()
+        env:
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          if [ -d "ADAUSD_MODELS" ]; then
+            STATUS="✅ Archivos encontrados"
+            FILES=$(ls -1 ADAUSD_MODELS/ | wc -l)
+            SIZE=$(du -sh ADAUSD_MODELS/ | cut -f1)
+            COMMIT=$(git log -1 --pretty=format:"%h - %s")
+            
+            MSG="🔍 *Verificación de Archivos*%0A%0A"
+            MSG="${MSG}${STATUS}%0A"
+            MSG="${MSG}Archivos: ${FILES}%0A"
+            MSG="${MSG}Tamaño: ${SIZE}%0A%0A"
+            MSG="${MSG}Último commit:%0A${COMMIT}"
+          else
+            MSG="❌ *Error*%0A%0ACarpeta ADAUSD_MODELS no encontrada"
+          fi
+          
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
+            -d chat_id="${CHAT_ID}" \
+            -d text="${MSG}" \
+            -d parse_mode="Markdown" || echo "⚠️ Telegram notification failed"
