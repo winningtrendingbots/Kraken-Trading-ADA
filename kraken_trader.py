@@ -361,9 +361,62 @@ def update_prediction_tracker_on_order_close(order_id, exit_price, pnl_usd, pnl_
     except Exception as e:
         print(f"❌ Error actualizando tracker: {e}")
 
+"""
+🔧 FUNCIÓN CORREGIDA: monitor_orders()
+Cierra posiciones abiertas correctamente con órdenes contrarias
+"""
+
+def close_position_in_kraken(txid, side, volume):
+    """
+    ✅ NUEVO: Cierra una posición abierta con una orden contraria
+    """
+    # Determinar el lado contrario
+    close_side = 'sell' if side == 'buy' else 'buy'
+    
+    print(f"🔄 Cerrando posición {txid[:8]}...")
+    print(f"   Original: {side.upper()} {volume} ADA")
+    print(f"   Cierre: {close_side.upper()} {volume} ADA")
+    
+    # Colocar orden de mercado contraria para cerrar inmediatamente
+    data = {
+        'nonce': str(int(1000*time.time())),
+        'ordertype': 'market',  # Market order para cierre inmediato
+        'type': close_side,
+        'volume': str(volume),
+        'pair': detect_ada_pair() or 'ADAUSD',
+        'leverage': '10',
+        'reduce_only': True  # ⚠️ IMPORTANTE: reduce_only=True cierra la posición
+    }
+    
+    result = kraken_request('/0/private/AddOrder', data)
+    return result
+
+
+def verify_position_in_kraken(txid):
+    """
+    ✅ NUEVO: Verifica si una posición realmente existe en Kraken
+    """
+    try:
+        data = {'nonce': str(int(1000*time.time()))}
+        result = kraken_request('/0/private/OpenPositions', data)
+        
+        if 'result' in result:
+            # Buscar si txid existe en posiciones abiertas
+            for pos_id, pos_data in result['result'].items():
+                if pos_id == txid or pos_data.get('ordertxid') == txid:
+                    return True, pos_data
+        
+        return False, None
+        
+    except Exception as e:
+        print(f"⚠️ Error verificando posición: {e}")
+        return False, None
+
 
 def monitor_orders():
-    """Monitorea órdenes abiertas y cierra por TP/SL/tiempo"""
+    """
+    ✅ VERSIÓN CORREGIDA: Monitorea y cierra posiciones correctamente
+    """
     if not os.path.exists(OPEN_ORDERS_FILE):
         print("ℹ️ No hay archivo de órdenes abiertas")
         return
@@ -395,6 +448,15 @@ def monitor_orders():
         
         time_open = (datetime.now() - open_time).total_seconds() / 60
         
+        # 🆕 VERIFICAR SI LA POSICIÓN AÚN EXISTE EN KRAKEN
+        if LIVE_TRADING:
+            exists, position_data = verify_position_in_kraken(txid)
+            
+            if not exists:
+                print(f"⚠️ Posición {txid[:8]} NO existe en Kraken (ya cerrada manualmente?)")
+                print(f"   Eliminando del tracking local...")
+                continue  # No la agregamos a updated_orders
+        
         should_close = False
         close_reason = None
         close_price = current_price
@@ -420,7 +482,7 @@ def monitor_orders():
             should_close = True
             close_reason = 'TIMEOUT'
         
-        # 4. STOP LOSS PROGRESIVO
+        # 4. STOP LOSS PROGRESIVO (primeros 10 min)
         elif time_open <= 10:
             loss_pct = ((current_price - entry_price) / entry_price) * 100
             if side == 'buy' and loss_pct < -1.0:
@@ -433,15 +495,25 @@ def monitor_orders():
         if should_close:
             print(f"🔴 Cerrando orden {txid[:8]}... por {close_reason}")
             print(f"   Tiempo abierto: {time_open:.1f} min")
-            print(f"   Precio entrada: ${entry_price:.4f}")  # ✅ 4 decimales
-            print(f"   Precio cierre: ${close_price:.4f}")   # ✅ 4 decimales
+            print(f"   Precio entrada: ${entry_price:.4f}")
+            print(f"   Precio cierre: ${close_price:.4f}")
             
             # 🔥 CERRAR EN KRAKEN SI LIVE_TRADING
             if LIVE_TRADING:
-                cancel_result = cancel_order(txid)
-                print(f"   Kraken cancel: {cancel_result}")
+                # ✅ USAR close_position CORRECTAMENTE
+                close_result = close_position_in_kraken(txid, side, volume)
+                
+                if 'result' in close_result and 'txid' in close_result['result']:
+                    print(f"   ✅ Posición cerrada en Kraken: {close_result['result']['txid']}")
+                elif 'error' in close_result:
+                    print(f"   ⚠️ Error cerrando en Kraken: {close_result['error']}")
+                    print(f"   ℹ️ Intentando cancelar como orden pendiente...")
+                    
+                    # Fallback: intentar cancelar como orden pendiente
+                    cancel_result = cancel_order(txid)
+                    print(f"   Cancel result: {cancel_result}")
             else:
-                print("   ⚠️ MODO SIMULACIÓN - Orden NO cancelada en Kraken")
+                print("   ⚠️ MODO SIMULACIÓN - Orden NO cerrada en Kraken")
             
             # Calcular P&L
             if side == 'buy':
@@ -451,14 +523,11 @@ def monitor_orders():
                 pnl = (entry_price - close_price) * volume
                 pnl_pct = ((entry_price - close_price) / entry_price) * 100
             
-            # 🆕 OBTENER DATOS REALES (High, Low, Close) para comparar con predicción
-            # En producción, esto vendría de datos históricos
-            # Por simplicidad, usamos close_price como aproximación
-            actual_high = close_price * 1.001  # Aprox
+            # Actualizar prediction tracker
+            actual_high = close_price * 1.001
             actual_low = close_price * 0.999
             actual_close = close_price
             
-            # 🆕 ACTUALIZAR PREDICTION TRACKER
             update_prediction_tracker_on_order_close(
                 txid, close_price, pnl, pnl_pct, close_reason,
                 actual_high, actual_low, actual_close
@@ -472,11 +541,11 @@ def monitor_orders():
                 'timestamp': datetime.now(),
                 'txid': txid,
                 'side': side,
-                'entry_price': round(entry_price, 4),    # ✅ 4 decimales
-                'close_price': round(close_price, 4),    # ✅ 4 decimales
+                'entry_price': round(entry_price, 4),
+                'close_price': round(close_price, 4),
                 'volume': volume,
-                'tp': round(tp, 4),                      # ✅ 4 decimales
-                'sl': round(sl, 4),                      # ✅ 4 decimales
+                'tp': round(tp, 4),
+                'sl': round(sl, 4),
                 'close_reason': close_reason,
                 'time_open_min': round(time_open, 1),
                 'pnl_usd': round(pnl, 2),
@@ -519,6 +588,7 @@ def monitor_orders():
             time_left = 300 - time_open
             print(f"📊 {txid[:8]}... | {side.upper()} | {time_open:.1f}min | Quedan {time_left:.1f}min")
     
+    # Guardar órdenes actualizadas
     with open(OPEN_ORDERS_FILE, 'w') as f:
         json.dump(updated_orders, f, indent=2)
     
@@ -527,6 +597,66 @@ def monitor_orders():
     else:
         print("✅ Todas las órdenes fueron cerradas")
 
+
+# 🆕 FUNCIÓN DE VERIFICACIÓN MANUAL
+def check_kraken_positions():
+    """
+    Verifica posiciones reales en Kraken y sincroniza con open_orders.json
+    """
+    print("\n" + "="*70)
+    print("  🔍 VERIFICANDO POSICIONES EN KRAKEN")
+    print("="*70)
+    
+    try:
+        data = {'nonce': str(int(1000*time.time()))}
+        result = kraken_request('/0/private/OpenPositions', data)
+        
+        if 'error' in result and len(result['error']) > 0:
+            print(f"❌ Error API: {result['error']}")
+            return
+        
+        if 'result' in result:
+            positions = result['result']
+            
+            if len(positions) == 0:
+                print("✅ NO hay posiciones abiertas en Kraken")
+            else:
+                print(f"📊 Posiciones abiertas en Kraken: {len(positions)}\n")
+                
+                for pos_id, pos_data in positions.items():
+                    pair = pos_data.get('pair', 'Unknown')
+                    side = pos_data.get('type', 'Unknown')
+                    volume = float(pos_data.get('vol', 0))
+                    cost = float(pos_data.get('cost', 0))
+                    margin = float(pos_data.get('margin', 0))
+                    pnl = float(pos_data.get('net', 0))
+                    
+                    print(f"🔸 ID: {pos_id}")
+                    print(f"   Par: {pair}")
+                    print(f"   Tipo: {side.upper()}")
+                    print(f"   Volumen: {volume}")
+                    print(f"   Costo: ${cost:.2f}")
+                    print(f"   Margen: ${margin:.2f}")
+                    print(f"   P&L: ${pnl:+.2f}")
+                    print()
+        
+        # Comparar con archivo local
+        if os.path.exists(OPEN_ORDERS_FILE):
+            with open(OPEN_ORDERS_FILE, 'r') as f:
+                local_orders = json.load(f)
+            
+            print(f"📁 Órdenes en open_orders.json: {len(local_orders)}")
+            
+            if len(local_orders) != len(positions):
+                print(f"⚠️ DESINCRONIZACIÓN DETECTADA:")
+                print(f"   Kraken: {len(positions)} posiciones")
+                print(f"   Local: {len(local_orders)} órdenes")
+                print(f"\n💡 Ejecuta monitor_orders() para sincronizar")
+        
+        print("="*70 + "\n")
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
 
 def execute_signal():
     """Lee señal Y sincroniza con balance REAL de Kraken"""
