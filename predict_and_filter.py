@@ -1,7 +1,9 @@
 """
 PREDICCIÓN + FILTROS TÉCNICOS - VERSIÓN CORREGIDA
+✅ Sintaxis correcta (SyntaxError fixed)
 ✅ 4 decimales en predicciones
 ✅ CSV unificado de tracking
+✅ Conversión de tipos numpy → Python
 """
 
 import pandas as pd
@@ -190,7 +192,7 @@ def save_to_prediction_tracker(timestamp, current_price, pred_high, pred_low, pr
     pred_range = pred_high - pred_low
     pred_range_pct = (pred_range / current_price) * 100
     
-    # ✅ Diccionario con sintaxis correcta y conversión de tipos
+    # ✅ FIX: Conversión explícita de tipos numpy → Python
     tracking_data = {
         'timestamp': timestamp,
         'current_price': float(round(current_price, 4)),
@@ -218,7 +220,7 @@ def save_to_prediction_tracker(timestamp, current_price, pred_high, pred_low, pr
         'actual_low': None,
         'actual_close': None,
         'pred_accuracy_%': None
-    }  # ✅ IMPORTANTE: Esta llave debe cerrarse correctamente
+    }
     
     df_track = pd.DataFrame([tracking_data])
     
@@ -334,10 +336,10 @@ def main():
     print("="*70)
     print("  PREDICCIÓN")
     print("="*70)
-    print(f"Precio Actual:   ${current_price:.4f}")   # ✅ 4 decimales
-    print(f"Pred High:       ${pred_high:.4f}")        # ✅ 4 decimales
-    print(f"Pred Low:        ${pred_low:.4f}")         # ✅ 4 decimales
-    print(f"Pred Close:      ${pred_close:.4f}")       # ✅ 4 decimales
+    print(f"Precio Actual:   ${current_price:.4f}")
+    print(f"Pred High:       ${pred_high:.4f}")
+    print(f"Pred Low:        ${pred_low:.4f}")
+    print(f"Pred Close:      ${pred_close:.4f}")
     print(f"Cambio Pred:     {((pred_close - current_price) / current_price * 100):+.2f}%")
     print("="*70 + "\n")
     
@@ -349,7 +351,7 @@ def main():
     trend = detect_trend(df)
     
     print(f"RSI:        {rsi:.1f}")
-    print(f"ATR:        ${atr:.4f}")  # ✅ 4 decimales
+    print(f"ATR:        ${atr:.4f}")
     print(f"Tendencia:  {trend}\n")
     
     # 6. GENERAR SEÑAL
@@ -369,7 +371,7 @@ def main():
     print(f"🚦 Señal:      {signal}")
     print(f"🎲 Confianza:  {confidence:.1f}%")
     print(f"📈 RSI:        {result['rsi']:.1f}")
-    print(f"📊 ATR:        ${result['atr']:.4f}")  # ✅ 4 decimales
+    print(f"📊 ATR:        ${result['atr']:.4f}")
     print(f"📉 Volatilidad: {result['volatility_%']:.2f}%")
     print(f"📍 Tendencia:  {result['trend']}")
     print("="*70 + "\n")
@@ -382,6 +384,7 @@ def main():
     )
     
     # 8. GUARDAR SEÑAL (CSV original)
+    # ✅ FIX: Conversión de tipos
     signal_data = {
         'timestamp': timestamp,
         'current_price': float(round(current_price, 4)),
@@ -395,7 +398,7 @@ def main():
         'signal': str(signal),
         'confidence': float(round(confidence, 1)),
         'rsi': float(round(result['rsi'], 1))
-    }  # ✅ Esta llave también debe cerrarse correctamente
+    }
     
     signals_file = 'trading_signals.csv'
     df_signal = pd.DataFrame([signal_data])
