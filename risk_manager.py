@@ -17,7 +17,7 @@ class RiskManager:
                  risk_per_trade=0.01,             # 2% de riesgo por trade
                  max_leverage=5,                  # 🆕 5x max (más seguro con banca pequeña)
                  margin_usage_limit=0.6,          # Usar máximo 60% del margen
-                 max_open_positions=3,            # 🆕 Solo 1 posición (con banca pequeña)
+                 max_open_positions=1,            # 🆕 Solo 1 posición (con banca pequeña)
                  min_rr_ratio=1.5,               # Mínimo Risk/Reward 1:1.5
                  liquidation_buffer=0.30,         # 30% buffer antes de liquidación
                  max_position_size=0.40,          # Máximo 40% del capital por posición
@@ -426,7 +426,7 @@ def get_risk_manager():
         risk_per_trade=0.02,           # 2% riesgo por trade (0.20€)
         max_leverage=5,                # 🆕 5x max (seguro para banca pequeña)
         margin_usage_limit=0.6,        # Usar máximo 60% del margen
-        max_open_positions=3,          # 🆕 Solo 1 posición a la vez
+        max_open_positions=1,          # 🆕 Solo 1 posición a la vez
         min_rr_ratio=1.5,             # Mínimo R/R 1.5:1
         liquidation_buffer=0.30,       # 30% buffer antes de liquidación
         max_position_size=0.40,        # Máximo 40% por posición
