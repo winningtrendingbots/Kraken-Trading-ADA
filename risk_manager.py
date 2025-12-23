@@ -13,15 +13,15 @@ from datetime import datetime
 
 class RiskManager:
     def __init__(self, 
-                 initial_capital=10,             # 🆕 10€ inicial (se sincroniza con Kraken)
-                 risk_per_trade=0.02,             # 2% de riesgo por trade
+                 initial_capital=40,             # 🆕 10€ inicial (se sincroniza con Kraken)
+                 risk_per_trade=0.01,             # 2% de riesgo por trade
                  max_leverage=5,                  # 🆕 5x max (más seguro con banca pequeña)
                  margin_usage_limit=0.6,          # Usar máximo 60% del margen
                  max_open_positions=1,            # 🆕 Solo 1 posición (con banca pequeña)
                  min_rr_ratio=1.5,               # Mínimo Risk/Reward 1:1.5
                  liquidation_buffer=0.30,         # 30% buffer antes de liquidación
                  max_position_size=0.40,          # Máximo 40% del capital por posición
-                 confidence_threshold=70):        # 🆕 Confianza mínima 70% (más conservador)
+                 confidence_threshold=75):        # 🆕 Confianza mínima 70% (más conservador)
         
         self.initial_capital = initial_capital
         self.risk_per_trade = risk_per_trade
