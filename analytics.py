@@ -181,6 +181,25 @@ def analyze_predictions(df_signals):
 def create_visualizations(df_trades, df_signals):
     """Crea gráficas de rendimiento"""
     
+    # ✅ NUEVO: Validación de datos mínimos
+    if len(df_trades) < 5 and len(df_signals) < 10:
+        print("⚠️ Datos insuficientes para gráficas")
+        print(f"   Trades: {len(df_trades)} (mínimo 5)")
+        print(f"   Señales: {len(df_signals)} (mínimo 10)")
+        
+        # Crear imagen placeholder
+        fig = plt.figure(figsize=(12, 8))
+        fig.text(0.5, 0.5, 
+                '⚠️ Datos Insuficientes\n\n'
+                f'Trades: {len(df_trades)}/5 mínimo\n'
+                f'Señales: {len(df_signals)}/10 mínimo\n\n'
+                'Las gráficas se generarán cuando haya más datos',
+                ha='center', va='center', fontsize=16)
+        
+        plt.savefig('trading_analytics.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        return 'trading_analytics.png'
+    
     fig = plt.figure(figsize=(20, 12))
     fig.suptitle('Trading Bot - Análisis de Rendimiento', fontsize=16, fontweight='bold')
     
