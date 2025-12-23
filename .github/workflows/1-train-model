@@ -80,7 +80,7 @@ jobs:
           python adausd_lstm.py
           echo "✅ Entrenamiento completado"
       
-      - name: 💾 Commit model
+      - name: Commit model
         if: steps.check.outputs.should_train == 'true'
         run: |
           git config user.name "github-actions[bot]"
@@ -89,18 +89,18 @@ jobs:
           git add ADAUSD_MODELS/ ADAUSD_1h_data.csv *.png 2>/dev/null || true
           
           if git diff --staged --quiet; then
-            echo "⚠️ No hay cambios para commitear"
+            echo "No hay cambios para commitear"
           else
-            git commit -m "🧠 Model trained $(date -u +%Y-%m-%d)"
+            git commit -m "Model trained $(date -u +%Y-%m-%d)"
             git push
-            echo "✅ Modelo guardado en repositorio"
+            echo "Modelo guardado en repositorio"
           fi
       
-      - name: 📊 Training summary
+      - name: Training summary
         if: always()
         run: |
           if [ "${{ steps.check.outputs.should_train }}" = "true" ]; then
-            echo "✅ Modelo entrenado exitosamente"
+            echo "Modelo entrenado exitosamente"
           else
-            echo "ℹ️ Entrenamiento no necesario (modelo vigente)"
+            echo "Entrenamiento no necesario (modelo vigente)"
           fi
