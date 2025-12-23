@@ -192,21 +192,22 @@ def save_to_prediction_tracker(timestamp, current_price, pred_high, pred_low, pr
     pred_range_pct = (pred_range / current_price) * 100
     
     tracking_data = {
+        tracking_data = {
         'timestamp': timestamp,
-        'current_price': round(current_price, 4),  # ✅ 4 decimales
-        'pred_high': round(pred_high, 4),           # ✅ 4 decimales
-        'pred_low': round(pred_low, 4),             # ✅ 4 decimales
-        'pred_close': round(pred_close, 4),         # ✅ 4 decimales
-        'pred_high_change_%': round(pred_high_change, 2),
-        'pred_low_change_%': round(pred_low_change, 2),
-        'pred_close_change_%': round(pred_close_change, 2),
-        'pred_range': round(pred_range, 4),         # ✅ 4 decimales
-        'pred_range_%': round(pred_range_pct, 2),
-        'signal': signal,
-        'confidence': round(confidence, 1),
-        'rsi': round(rsi, 1),
-        'atr': round(atr, 4),                       # ✅ 4 decimales
-        'trend': trend,
+        'current_price': float(round(current_price, 4)),  # ✅ Agregar float()
+        'pred_high': float(round(pred_high, 4)),
+        'pred_low': float(round(pred_low, 4)),
+        'pred_close': float(round(pred_close, 4)),
+        'pred_high_change_%': float(round(pred_high_change, 2)),
+        'pred_low_change_%': float(round(pred_low_change, 2)),
+        'pred_close_change_%': float(round(pred_close_change, 2)),
+        'pred_range': float(round(pred_range, 4)),
+        'pred_range_%': float(round(pred_range_pct, 2)),
+        'signal': str(signal),  # ✅ Agregar str()
+        'confidence': float(round(confidence, 1)),
+        'rsi': float(round(rsi, 1)),  # ✅ Agregar float()
+        'atr': float(round(atr, 4)),  # ✅ Agregar float()
+        'trend': str(trend),  # ✅ Agregar str()
         'order_opened': 'NO',  # Se actualizará si se abre orden
         'order_id': None,
         'entry_price': None,
@@ -384,17 +385,17 @@ def main():
     # 8. GUARDAR SEÑAL (CSV original)
     signal_data = {
         'timestamp': timestamp,
-        'current_price': round(current_price, 4),    # ✅ 4 decimales
-        'pred_high': round(pred_high, 4),            # ✅ 4 decimales
-        'pred_low': round(pred_low, 4),              # ✅ 4 decimales
-        'pred_close': round(pred_close, 4),          # ✅ 4 decimales
-        'pred_change_%': round(result['pred_change_%'], 2),
-        'atr': round(result['atr'], 4),              # ✅ 4 decimales
-        'volatility': round(result['volatility_%'], 2),
-        'trend': result['trend'],
-        'signal': signal,
-        'confidence': round(confidence, 1),
-        'rsi': round(result['rsi'], 1)
+        'current_price': float(round(current_price, 4)),  # ✅ float()
+        'pred_high': float(round(pred_high, 4)),
+        'pred_low': float(round(pred_low, 4)),
+        'pred_close': float(round(pred_close, 4)),
+        'pred_change_%': float(round(result['pred_change_%'], 2)),
+        'atr': float(round(result['atr'], 4)),
+        'volatility': float(round(result['volatility_%'], 2)),
+        'trend': str(result['trend']),
+        'signal': str(signal),
+        'confidence': float(round(confidence, 1)),
+        'rsi': float(round(result['rsi'], 1))  # ✅ float()
     }
     
     signals_file = 'trading_signals.csv'
