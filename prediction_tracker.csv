@@ -1,0 +1,2 @@
+timestamp,current_price,pred_high,pred_low,pred_close,pred_high_change_%,pred_low_change_%,pred_close_change_%,pred_range,pred_range_%,signal,confidence,rsi,atr,trend,order_opened,order_id,entry_price,exit_price,pnl_usd,pnl_%,close_reason,actual_high,actual_low,actual_close,pred_accuracy_%
+2025-12-23 21:31:43.172844,0.3636,0.3666999936103821,0.36399999260902405,0.3653999865055084,0.85,0.1,0.49,0.0027000000700354576,0.75,HOLD,50.0,48.7,0.0033,SIDEWAYS,NO,,,,,,,,,,
