@@ -124,7 +124,7 @@ jobs:
           # Construir mensaje
           msg = f"""🔬 Comparacion LSTM vs Baseline
 
-{emoji} {verdict}
+#{emoji} {verdict}
 
 📊 R2 Scores:
    LSTM: {lstm_r2:.4f}
