@@ -1,10 +1,9 @@
-name: 🔄 Sync Data to Dashboard
+name: 🌐 Dashboard Sync
 
 on:
   schedule:
     - cron: '*/5 * * * *'  # Cada 5 minutos
   push:
-    branches: [ main ]
     paths:
       - '*.csv'
       - '*.json'
@@ -15,120 +14,66 @@ permissions:
   contents: write
 
 jobs:
-  sync-data:
+  sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Set up job
-        run: echo "🚀 Iniciando sincronización..."
-      
-      - name: Checkout trading repo
+      - name: 📥 Checkout trading repo
         uses: actions/checkout@v4
         with:
           path: trading
       
-      - name: Checkout dashboard repo
+      - name: 📥 Checkout dashboard repo
         uses: actions/checkout@v4
         with:
           repository: winningtrendingbots/winningtrendingbots.github.io
           token: ${{ secrets.DASHBOARD_TOKEN }}
           path: dashboard
       
-      - name: Copy CSV files
+      - name: 📂 Verificar archivos disponibles
         run: |
-          echo "📋 Copiando archivos CSV..."
-          
-          # Función para copiar si existe
-          copy_if_exists() {
-            if [ -f "trading/$1" ]; then
-              cp "trading/$1" "dashboard/$1"
-              echo "✅ Copiado: $1"
-              return 0
-            else
-              echo "⚠️ No existe aún: $1"
-              return 1
-            fi
-          }
-          
-          # Intentar copiar cada archivo
-          files_copied=0
-          
-          if copy_if_exists "kraken_trades.csv"; then files_copied=$((files_copied + 1)); fi
-          if copy_if_exists "trading_signals.csv"; then files_copied=$((files_copied + 1)); fi
-          if copy_if_exists "orders_executed.csv"; then files_copied=$((files_copied + 1)); fi
-          if copy_if_exists "ADAUSD_1h_data.csv"; then files_copied=$((files_copied + 1)); fi
-          
-          # Copiar cualquier otro CSV
-          for file in trading/*.csv; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file")
-              if ! [ -f "dashboard/$filename" ]; then
-                cp "$file" "dashboard/$filename"
-                echo "✅ Copiado adicional: $filename"
-                files_copied=$((files_copied + 1))
-              fi
-            fi
-          done
-          
-          # Copiar JSONs si existen
-          for file in trading/*.json; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file")
-              cp "$file" "dashboard/$filename"
-              echo "✅ Copiado JSON: $filename"
-              files_copied=$((files_copied + 1))
-            fi
-          done
-          
-          # Copiar PNGs si existen
-          for file in trading/*.png; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file")
-              cp "$file" "dashboard/$filename"
-              echo "✅ Copiado PNG: $filename"
-              files_copied=$((files_copied + 1))
-            fi
-          done
-          
+          echo "=== Archivos en trading repo ==="
+          ls -la trading/*.csv trading/*.json trading/*.png 2>/dev/null || echo "No hay archivos CSV/JSON/PNG aún"
           echo ""
-          echo "📊 Total de archivos copiados: $files_copied"
+          echo "Estos archivos se copiarán a la RAÍZ de github.io"
+      
+      - name: 📋 Copiar archivos a la RAÍZ
+        run: |
+          # Copiar CSVs a la raíz (no a /data/)
+          if ls trading/*.csv 1> /dev/null 2>&1; then
+            cp trading/*.csv dashboard/
+            echo "✅ CSVs copiados a la raíz"
+          else
+            echo "⚠️ No hay archivos CSV para copiar"
+          fi
           
-          # Si no hay archivos, crear placeholders
-          if [ $files_copied -eq 0 ]; then
-            echo "⚠️ No hay datos aún. Creando placeholders..."
-            
-            echo "timestamp,txid,side,entry_price,close_price,volume,tp,sl,close_reason,time_open_min,pnl_usd,pnl_%" > dashboard/kraken_trades.csv
-            echo "timestamp,current_price,pred_high,pred_low,pred_close,pred_change_%,atr,volatility,trend,signal,confidence" > dashboard/trading_signals.csv
-            
-            echo "✅ Placeholders creados"
+          # Copiar JSONs a la raíz
+          if ls trading/*.json 1> /dev/null 2>&1; then
+            cp trading/*.json dashboard/
+            echo "✅ JSONs copiados a la raíz"
+          else
+            echo "⚠️ No hay archivos JSON para copiar"
+          fi
+          
+          # Copiar PNGs a la raíz
+          if ls trading/*.png 1> /dev/null 2>&1; then
+            cp trading/*.png dashboard/
+            echo "✅ PNGs copiados a la raíz"
+          else
+            echo "⚠️ No hay archivos PNG para copiar"
           fi
       
-      - name: Create data directory if not exists
-        run: mkdir -p dashboard/data
-      
-      - name: Create metadata
+      - name: 📊 Crear metadata en la raíz
         run: |
           cd dashboard
-          
-          # Contar archivos reales (no vacíos)
-          csv_count=$(find . -maxdepth 1 -name "*.csv" -type f -size +100c | wc -l)
-          
-          cat > sync_metadata.json << EOF
-          {
-            "last_sync": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "source_repo": "winningtrendingbots/Kraken-Trading",
-            "sync_type": "automated",
-            "files_synced": $csv_count,
-            "status": "$([ $csv_count -gt 0 ] && echo 'active' || echo 'waiting_for_data')"
-          }
-          EOF
-          
-          echo "📊 Metadata creado:"
-          cat sync_metadata.json
+          echo "{
+            \"last_sync\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
+            \"source_repo\": \"winningtrendingbots/Kraken-Trading\",
+            \"sync_type\": \"automated\"
+          }" > sync_metadata.json
       
-      - name: Commit and push
+      - name: 🚀 Commit y push
         run: |
           cd dashboard
-          
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
@@ -136,19 +81,8 @@ jobs:
           
           if git diff --staged --quiet; then
             echo "📭 No hay cambios para commitear"
-            echo "CHANGES=false" >> $GITHUB_ENV
           else
-            timestamp=$(date -u +%Y-%m-%d\ %H:%M:%S)
-            git commit -m "🔄 Data sync: $timestamp UTC"
+            git commit -m "🔄 Sync data $(date -u +%Y-%m-%d\ %H:%M:%S) UTC"
             git push
             echo "✅ Cambios pusheados exitosamente"
-            echo "CHANGES=true" >> $GITHUB_ENV
           fi
-      
-      - name: Post Checkout trading repo
-        if: env.CHANGES == 'true'
-        run: echo "✅ Sincronización completada con éxito"
-      
-      - name: Post Checkout dashboard repo
-        if: env.CHANGES == 'false'
-        run: echo "ℹ️ No hubo cambios en esta sincronización"
