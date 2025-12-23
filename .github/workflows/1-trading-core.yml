@@ -29,32 +29,27 @@ jobs:
   determine-task:
     runs-on: ubuntu-latest
     outputs:
-      should_train: ${{ steps.check.outputs.should_train }}
-      should_predict: ${{ steps.check.outputs.should_predict }}
-      should_monitor: ${{ steps.check.outputs.should_monitor }}
+      run_train: ${{ steps.decide.outputs.run_train }}
+      run_predict: ${{ steps.decide.outputs.run_predict }}
+      run_monitor: ${{ steps.decide.outputs.run_monitor }}
+
     steps:
-      - id: check
+      - name: Debug outputs
         run: |
-          TASK="${{ github.event.inputs.task }}"
-          SCHEDULE="${{ github.event.schedule }}"
-          
-          if [[ "$SCHEDULE" == "0 8 * * *" ]] || [[ "$TASK" == "train" ]] || [[ "$TASK" == "all" ]]; then
-            echo "should_train=true" >> $GITHUB_OUTPUT
-          else
-            echo "should_train=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if [[ "$SCHEDULE" == "0 * * * *" ]] || [[ "$TASK" == "predict" ]] || [[ "$TASK" == "all" ]]; then
-            echo "should_predict=true" >> $GITHUB_OUTPUT
-          else
-            echo "should_predict=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if [[ "$SCHEDULE" == "*/15 * * * *" ]] || [[ "$TASK" == "monitor" ]] || [[ "$TASK" == "all" ]]; then
-            echo "should_monitor=true" >> $GITHUB_OUTPUT
-          else
-            echo "should_monitor=false" >> $GITHUB_OUTPUT
-          fi
+            echo "run_train=${{ steps.decide.outputs.run_train }}"
+            echo "run_predict=${{ steps.decide.outputs.run_predict }}"
+            echo "run_monitor=${{ steps.decide.outputs.run_monitor }}"
+
+
+    
+      - name: Decide tasks
+        id: decide
+        run: |
+          # AJUSTA ESTA LÓGICA SI QUIERES, PERO LOS OUTPUTS DEBEN EXISTIR
+          echo "run_train=true" >> $GITHUB_OUTPUT
+          echo "run_predict=true" >> $GITHUB_OUTPUT
+          echo "run_monitor=true" >> $GITHUB_OUTPUT
+
 
   train-model:
     needs: determine-task
