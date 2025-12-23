@@ -9,10 +9,11 @@ on:
       - 'kraken_trades.csv'
       - 'trading_signals.csv'
       - 'orders_executed.csv'
+      - 'prediction_tracker.csv'  # ✅ NUEVO
       - 'adausd_results.png'
       - 'trading_analytics.png'
   
-  workflow_dispatch:  # Ejecución manual
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -63,6 +64,12 @@ jobs:
             files_found=$((files_found + 1))
           fi
           
+          # ✅ NUEVO: Verificar prediction_tracker.csv
+          if [ -f "prediction_tracker.csv" ]; then
+            echo "✅ prediction_tracker.csv"
+            files_found=$((files_found + 1))
+          fi
+          
           if [ -f "adausd_results.png" ]; then
             echo "✅ adausd_results.png"
             files_found=$((files_found + 1))
@@ -76,14 +83,11 @@ jobs:
           echo "has_files=$files_found" >> $GITHUB_OUTPUT
           echo "Total: $files_found archivos"
       
-      - name: 📁 Crear estructura en dashboard
+      - name: 🗂️ Crear estructura en dashboard
         if: steps.check_files.outputs.has_files > 0
         run: |
           cd dashboard
-          
-          # Crear carpetas si no existen
           mkdir -p data images
-          
           echo "✅ Estructura creada"
       
       - name: 📋 Copiar archivos CSV
@@ -93,6 +97,10 @@ jobs:
           [ -f "trading/kraken_trades.csv" ] && cp trading/kraken_trades.csv dashboard/data/ && echo "✅ Copied kraken_trades.csv"
           [ -f "trading/trading_signals.csv" ] && cp trading/trading_signals.csv dashboard/data/ && echo "✅ Copied trading_signals.csv"
           [ -f "trading/orders_executed.csv" ] && cp trading/orders_executed.csv dashboard/data/ && echo "✅ Copied orders_executed.csv"
+          
+          # ✅ NUEVO: Copiar prediction_tracker.csv
+          [ -f "trading/prediction_tracker.csv" ] && cp trading/prediction_tracker.csv dashboard/data/ && echo "✅ Copied prediction_tracker.csv"
+          
           [ -f "trading/open_orders.json" ] && cp trading/open_orders.json dashboard/data/ && echo "✅ Copied open_orders.json"
           [ -f "trading/risk_config.json" ] && cp trading/risk_config.json dashboard/data/ && echo "✅ Copied risk_config.json"
           
@@ -111,10 +119,12 @@ jobs:
           TRADES=0
           SIGNALS=0
           ORDERS=0
+          PREDICTIONS=0  # ✅ NUEVO
           
           [ -f "data/kraken_trades.csv" ] && TRADES=$(tail -n +2 data/kraken_trades.csv | wc -l)
           [ -f "data/trading_signals.csv" ] && SIGNALS=$(tail -n +2 data/trading_signals.csv | wc -l)
           [ -f "data/orders_executed.csv" ] && ORDERS=$(tail -n +2 data/orders_executed.csv | wc -l)
+          [ -f "data/prediction_tracker.csv" ] && PREDICTIONS=$(tail -n +2 data/prediction_tracker.csv | wc -l)
           
           # Verificar imágenes
           HAS_MODEL="false"
@@ -132,7 +142,8 @@ jobs:
   "files": {
     "trades": $TRADES,
     "signals": $SIGNALS,
-    "orders": $ORDERS
+    "orders": $ORDERS,
+    "predictions": $PREDICTIONS
   },
   "images": {
     "model_results": $HAS_MODEL,
@@ -144,7 +155,7 @@ EOF
           echo "📊 metadata.json generado"
           cat data/metadata.json
       
-      - name: 🔍 Verificar index.html
+      - name: 🌐 Verificar index.html
         if: steps.check_files.outputs.has_files > 0
         run: |
           cd dashboard
@@ -223,6 +234,15 @@ EOF
             margin-top: 40px;
             opacity: 0.8;
         }
+        .new-badge {
+            background: #ff6b6b;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7em;
+            margin-left: 8px;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -236,6 +256,7 @@ EOF
                 <a href="data/kraken_trades.csv" download>📥 Trades</a>
                 <a href="data/trading_signals.csv" download>📥 Señales</a>
                 <a href="data/orders_executed.csv" download>📥 Órdenes</a>
+                <a href="data/prediction_tracker.csv" download>📥 Predicciones<span class="new-badge">NEW</span></a>
             </div>
             
             <div class="card">
@@ -259,6 +280,10 @@ EOF
         
         <div class="footer">
             <p>Última actualización: <span id="lastUpdate">Cargando...</span></p>
+            <p style="margin-top: 10px;">
+                <span class="new-badge">NEW</span> 
+                Ahora con 4 decimales en predicciones y tracking unificado
+            </p>
         </div>
     </div>
     
@@ -296,25 +321,26 @@ HTMLEOF
             echo "ℹ️ No hay cambios"
           else
             TRADES=0
+            PREDICTIONS=0
             [ -f data/kraken_trades.csv ] && TRADES=$(tail -n +2 data/kraken_trades.csv | wc -l)
+            [ -f data/prediction_tracker.csv ] && PREDICTIONS=$(tail -n +2 data/prediction_tracker.csv | wc -l)
             
-            git commit -m "🌐 Dashboard sync [$(date +'%Y-%m-%d %H:%M UTC')] Trades: $TRADES"
+            git commit -m "🌐 Dashboard sync [$(date +'%Y-%m-%d %H:%M UTC')] T:$TRADES P:$PREDICTIONS"
             git push origin main
             
             echo "✅ Dashboard sincronizado"
             echo ""
-            echo "═══════════════════════════════════════"
+            echo "╔════════════════════════════════════╗"
             echo "  🌐 DASHBOARD ACTUALIZADO"
-            echo "═══════════════════════════════════════"
+            echo "╚════════════════════════════════════╝"
             echo "URL: https://winningtrendingbots.github.io/"
-            echo "═══════════════════════════════════════"
+            echo "╚════════════════════════════════════╝"
           fi
       
       - name: 📱 Notificar sincronización
         if: always() && steps.check_files.outputs.has_files > 0
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           URL="https://winningtrendingbots.github.io/"
@@ -325,6 +351,6 @@ HTMLEOF
           MSG="${MSG}🔗 ${URL}"
           
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
-            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d chat_id="${CHAT_ID}" \
             -d text="${MSG}" \
             -d parse_mode="Markdown" || echo "⚠️ Telegram notification failed"
