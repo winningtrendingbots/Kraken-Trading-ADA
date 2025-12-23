@@ -3,8 +3,8 @@ name: 🤖 Trading Bot Core
 on:
   schedule:
     - cron: '0 8 * * *'      # Entrenar diario 9 AM UTC
-    - cron: '0 * * * *'      # Predicción + Trading cada hora
-    - cron: '*/6 * * * *'   # Monitoreo cada 15 minutos
+    - cron: '*/10 * * * *'      # Predicción + Trading cada hora
+    - cron: '*/3 * * * *'   # Monitoreo cada 15 minutos
   
   workflow_dispatch:
     inputs:
