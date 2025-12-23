@@ -2,10 +2,10 @@ name: 🤖 Trading Bot Core
 
 on:
   schedule:
-    - cron: '0 8 * * *'      # Entrenar diario 9 AM UTC
-    - cron: '*/15 * * * *'      # Predicción + Trading cada 15 minutos
-    - cron: '*/5 * * * *'   # Monitoreo cada 5 minutos
-  
+    - cron: '0 8 * * *'        # 🧠 Train diario 08:00 UTC
+    - cron: '*/11 * * * *'     # 🔮 Predict + Trade cada 11 min
+    - cron: '*/4 * * * *'      # 👁️ Monitor cada 4 min
+
   workflow_dispatch:
     inputs:
       task:
@@ -14,7 +14,7 @@ on:
         type: choice
         options:
           - train
-          - predict
+          - predict_trade
           - monitor
           - all
 
@@ -22,15 +22,18 @@ permissions:
   contents: write
 
 concurrency:
-  group: trading-${{ github.event.schedule || github.event.inputs.task || 'auto' }}
+  group: trading-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
+# ==========================================================
+# 🧠 DECIDIR QUÉ SE EJECUTA
+# ==========================================================
   determine-task:
     runs-on: ubuntu-latest
     outputs:
       should_train: ${{ steps.decide.outputs.should_train }}
-      should_predict: ${{ steps.decide.outputs.should_predict }}
+      should_predict_trade: ${{ steps.decide.outputs.should_predict_trade }}
       should_monitor: ${{ steps.decide.outputs.should_monitor }}
 
     steps:
@@ -38,315 +41,181 @@ jobs:
         id: decide
         run: |
           HOUR=$(date -u +%H)
-          
-          # Por defecto todas en false
-          TRAIN="false"
-          PREDICT="false"
-          MONITOR="false"
-          
-          # Lógica basada en schedule o manual
+          MIN=$(date -u +%M)
+
+          TRAIN=false
+          PREDICT_TRADE=false
+          MONITOR=false
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             case "${{ github.event.inputs.task }}" in
-              "train")
-                TRAIN="true"
+              train)
+                TRAIN=true
                 ;;
-              "predict")
-                PREDICT="true"
+              predict_trade)
+                PREDICT_TRADE=true
                 ;;
-              "monitor")
-                MONITOR="true"
+              monitor)
+                MONITOR=true
                 ;;
-              "all")
-                TRAIN="true"
-                PREDICT="true"
-                MONITOR="true"
+              all)
+                TRAIN=true
+                PREDICT_TRADE=true
+                MONITOR=true
                 ;;
             esac
           else
-            # Schedule automático
-            # Entrenar solo a las 08:00 UTC
-            if [ "$HOUR" = "08" ]; then
-              TRAIN="true"
+            # 🧠 Train diario 08:00 UTC
+            if [ "$HOUR" = "08" ] && [ "$MIN" = "00" ]; then
+              TRAIN=true
             fi
-            
-            # Predicción cada hora
-            if [ "${{ github.event.schedule }}" = */15 * * * *" ]; then
-              PREDICT="true"
+
+            # 🔮 Predict + Trade cada 11 minutos
+            if (( MIN % 11 == 0 )); then
+              PREDICT_TRADE=true
             fi
-            
-            # Monitoreo cada 15 min
-            if [ "${{ github.event.schedule }}" = "*/5 * * * *" ]; then
-              MONITOR="true"
+
+            # 👁️ Monitor cada 4 minutos
+            if (( MIN % 4 == 0 )); then
+              MONITOR=true
             fi
           fi
-          
-          # Outputs
-          echo "should_train=$TRAIN" >> $GITHUB_OUTPUT
-          echo "should_predict=$PREDICT" >> $GITHUB_OUTPUT
-          echo "should_monitor=$MONITOR" >> $GITHUB_OUTPUT
-      
-      - name: Debug outputs
-        run: |
-          echo "🔍 Decisiones tomadas:"
-          echo "should_train=${{ steps.decide.outputs.should_train }}"
-          echo "should_predict=${{ steps.decide.outputs.should_predict }}"
-          echo "should_monitor=${{ steps.decide.outputs.should_monitor }}"
 
+          echo "should_train=$TRAIN" >> $GITHUB_OUTPUT
+          echo "should_predict_trade=$PREDICT_TRADE" >> $GITHUB_OUTPUT
+          echo "should_monitor=$MONITOR" >> $GITHUB_OUTPUT
+
+# ==========================================================
+# 🧠 TRAIN MODEL
+# ==========================================================
   train-model:
     needs: determine-task
     if: needs.determine-task.outputs.should_train == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
+
     steps:
-      - name: 🔥 Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-      
-      - name: 📦 Instalar dependencias
+          cache: pip
+
+      - name: Install deps
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-      
-      - name: 🧠 Entrenar modelo
+
+      - name: Train model
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: |
-          python adausd_lstm.py
-      
-      - name: ✅ Verificar archivos
-        id: check_files
-        run: |
-          files_ok=true
-          
-          if [ -d "ADAUSD_MODELS" ]; then
-            echo "✅ ADAUSD_MODELS/ generado"
-            ls -lh ADAUSD_MODELS/
-          else
-            echo "❌ ADAUSD_MODELS/ NO generado"
-            files_ok=false
-          fi
-          
-          if [ -f "ADAUSD_1h_data.csv" ]; then
-            echo "✅ ADAUSD_1h_data.csv generado"
-          else
-            echo "❌ ADAUSD_1h_data.csv NO generado"
-            files_ok=false
-          fi
-          
-          echo "files_ok=$files_ok" >> $GITHUB_OUTPUT
-      
-      - name: 💾 Guardar modelo
-        if: steps.check_files.outputs.files_ok == 'true'
+        run: python adausd_lstm.py
+
+      - name: Commit model
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git fetch origin main
-          
-          LOCAL=$(git rev-parse HEAD)
-          REMOTE=$(git rev-parse origin/main)
-          
-          if [ "$LOCAL" != "$REMOTE" ]; then
-            echo "Sincronizando con remoto..."
-            git merge origin/main --no-edit --strategy-option=theirs || {
-              git checkout --ours ADAUSD_MODELS/ ADAUSD_1h_data.csv adausd_results.png
-              git add -A
-              git merge --continue --no-edit
-            }
-          fi
-          
-          git add -f ADAUSD_MODELS/
-          git add -f ADAUSD_MODELS/*.pth
-          git add -f ADAUSD_MODELS/*.pkl
-          git add -f ADAUSD_MODELS/*.json
-          git add -f ADAUSD_1h_data.csv
-          git add -f adausd_results.png
-          git add -f LAST_TRAINING.txt
-          git add -f risk_config.json 2>/dev/null || true
-          
-          STAGED_FILES=$(git diff --staged --name-only)
-          
-          if [ -z "$STAGED_FILES" ]; then
-            echo "ERROR: No hay archivos para commitear"
-            exit 1
-          fi
-          
-          FILES_COUNT=$(echo "$STAGED_FILES" | wc -l)
-          
-          git commit -m "Model trained [$(date +'%Y-%m-%d %H:%M UTC')]" \
-                     -m "Files: $FILES_COUNT" \
-                     -m "Updated: ADAUSD_MODELS, data, charts"
-          
-          for i in {1..3}; do
-            if git push origin main; then
-              echo "Push exitoso"
-              exit 0
-            fi
-            sleep 2
-            git pull --rebase origin main
-          done
-          
-          exit 1
+          git add -A
+          git commit -m "🧠 Model trained $(date -u +'%Y-%m-%d %H:%M')" || echo "No changes"
+          git push origin main
 
+# ==========================================================
+# 🔮 PREDICT + TRADE
+# ==========================================================
   predict-and-trade:
-    needs: [determine-task, train-model]
-    if: |
-      always() &&
-      needs.determine-task.outputs.should_predict == 'true' &&
-      (needs.train-model.result == 'success' || needs.train-model.result == 'skipped')
+    needs: determine-task
+    if: needs.determine-task.outputs.should_predict_trade == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     steps:
-      - name: 🔥 Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-      
-      - name: 📦 Instalar dependencias
+          cache: pip
+
+      - name: Install deps
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-      
-      - name: ✅ Verificar modelo
+
+      - name: Check open orders
+        id: check_orders
         run: |
-          if [ ! -d "ADAUSD_MODELS" ]; then
-            echo "ERROR: No existe ADAUSD_MODELS/"
-            exit 1
+          COUNT=0
+          if [ -f open_orders.json ]; then
+            COUNT=$(grep -c '"txid"' open_orders.json || echo 0)
           fi
-      
-      - name: 🔍 Verificar órdenes
-        id: check_order
-        run: |
-          if [ -f "open_orders.json" ]; then
-            ORDERS=$(cat open_orders.json | grep -c "txid" || echo "0")
-            if [ "$ORDERS" -gt "0" ]; then
-              echo "skip_trading=true" >> $GITHUB_OUTPUT
-            else
-              echo "skip_trading=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "skip_trading=false" >> $GITHUB_OUTPUT
+
+          echo "open_orders=$COUNT" >> $GITHUB_OUTPUT
+
+          if [ "$COUNT" -gt 3 ]; then
+            echo "❌ Más de 3 órdenes abiertas, NO se tradea"
+            exit 0
           fi
-      
-      - name: 🔮 Generar predicción
-        if: steps.check_order.outputs.skip_trading != 'true'
+
+      - name: Predict
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python predict_and_filter.py
-      
-      - name: 💼 Ejecutar trading
-        if: steps.check_order.outputs.skip_trading != 'true'
+
+      - name: Trade
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
           KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
         run: python kraken_trader.py
-      
-      - name: 💾 Guardar señales
+
+      - name: Commit trading data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main || true
-          
-          git add trading_signals.csv \
-                  orders_executed.csv \
-                  kraken_trades.csv \
-                  open_orders.json \
-                  risk_config.json \
-                  prediction_tracker.csv 2>/dev/null || true
-          
-          if git diff --staged --quiet; then
-            echo "No hay cambios"
-          else
-            git commit -m "Trading data [$(date +'%H:%M UTC')]"
-            git push origin main
-          fi
+          git add trading_signals.csv orders_executed.csv kraken_trades.csv open_orders.json prediction_tracker.csv || true
+          git commit -m "🔮 Predict & Trade $(date -u +'%H:%M')" || echo "No changes"
+          git push origin main
 
+# ==========================================================
+# 👁️ MONITOR
+# ==========================================================
   monitor-orders:
     needs: determine-task
     if: needs.determine-task.outputs.should_monitor == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     steps:
-      - name: 🔥 Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-      
-      - name: 📦 Instalar dependencias
+          cache: pip
+
+      - name: Install deps
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-      
-      - name: 🔍 Monitorear órdenes
+
+      - name: Monitor orders
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
           KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
         run: |
-          if [ ! -f "open_orders.json" ]; then
-            exit 0
-          fi
-          
-          ORDERS=$(cat open_orders.json | grep -c "txid" || echo "0")
-          if [ "$ORDERS" -eq "0" ]; then
-            exit 0
-          fi
-          
+          if [ ! -f open_orders.json ]; then exit 0; fi
           python -c "from kraken_trader import monitor_orders; monitor_orders()"
-      
-      - name: 💾 Actualizar estado
+
+      - name: Commit monitor updates
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main || true
-          
-          git add kraken_trades.csv \
-                  open_orders.json \
-                  risk_config.json \
-                  prediction_tracker.csv 2>/dev/null || true
-          
-          if git diff --staged --quiet; then
-            echo "No hay cambios"
-          else
-            git commit -m "Monitor update [$(date +'%H:%M UTC')]"
-            git push origin main
-          fi
-
-  notify-completion:
-    needs: [determine-task, train-model, predict-and-trade, monitor-orders]
-    if: failure()
-    runs-on: ubuntu-latest
-    steps:
-      - name: 📱 Notificar error
-        env:
-          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: |
-          MSG="❌ ERROR in Trading Bot at $(date +'%Y-%m-%d %H:%M UTC')"
-          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
-            -d chat_id="${CHAT_ID}" \
-            -d text="$MSG"
+          git add kraken_trades.csv open_orders.json prediction_tracker.csv || true
+          git commit -m "👁️ Monitor $(date -u +'%H:%M')" || echo "No changes"
+          git push origin main
