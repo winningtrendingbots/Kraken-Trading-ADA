@@ -27,10 +27,20 @@ Thumbs.db
 # Logs
 *.log
 
-# ✅ IMPORTANTE: NO ignorar estos archivos  ⬅️ ESTO ES SOLO UN COMENTARIO
-# Comentar o eliminar estas líneas si existen:
-# *.pth    ⬅️ Estas líneas están comentadas
-# *.pkl
-# *.png
-# *.csv
-# ADAUSD_MODELS/
+# ============================================
+# ✅ ARCHIVOS DEL MODELO - NO IGNORAR
+# ============================================
+# Permitir explícitamente archivos del modelo
+!ADAUSD_MODELS/
+!ADAUSD_MODELS/*.pth
+!ADAUSD_MODELS/*.pkl
+!ADAUSD_MODELS/*.json
+!ADAUSD_1h_data.csv
+!adausd_results.png
+!trading_analytics.png
+!LAST_TRAINING.txt
+
+# Ignorar OTROS archivos temporales de Python
+# pero NO los del modelo
+*.log
+.DS_Store
