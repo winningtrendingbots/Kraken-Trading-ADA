@@ -1,13 +1,7 @@
 """
 PREDICCIÓN + FILTROS TÉCNICOS - VERSIÓN CORREGIDA
-
-Este script:
-1. Carga el modelo LSTM entrenado
-2. Descarga datos recientes de ADAUSD (1h)
-3. Genera predicción (High, Low, Close)
-4. Aplica filtros técnicos (RSI, ATR, Tendencia)
-5. Genera señal: BUY, SELL o HOLD
-6. Guarda en trading_signals.csv
+✅ 4 decimales en predicciones
+✅ CSV unificado de tracking
 """
 
 import pandas as pd
@@ -25,6 +19,9 @@ import requests
 TELEGRAM_API = os.environ.get('TELEGRAM_API', '')
 CHAT_ID = os.environ.get('CHAT_ID', '')
 
+# 🆕 Archivo de tracking unificado
+PREDICTION_TRACKER_FILE = 'prediction_tracker.csv'
+
 def send_telegram(msg):
     if not TELEGRAM_API or not CHAT_ID:
         print("⚠️ Telegram no configurado")
@@ -36,7 +33,6 @@ def send_telegram(msg):
         print(f"❌ Telegram: {e}")
 
 
-# ✅ CLASE SINCRONIZADA CON adausd_lstm.py
 class MultiOutputLSTM(nn.Module):
     """Versión con BatchNorm - SINCRONIZADA con entrenamiento"""
     def __init__(self, input_size=4, hidden_size=192, num_layers=2,
@@ -49,14 +45,9 @@ class MultiOutputLSTM(nn.Module):
                            batch_first=True, 
                            dropout=dropout if num_layers > 1 else 0)
         
-        # ✅ BatchNorm después de LSTM
         self.bn1 = nn.BatchNorm1d(hidden_size)
-        
         self.fc1 = nn.Linear(hidden_size, hidden_size // 2)
-        
-        # ✅ BatchNorm intermedia
         self.bn2 = nn.BatchNorm1d(hidden_size // 2)
-        
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
         self.fc2 = nn.Linear(hidden_size // 2, output_size)
@@ -64,13 +55,11 @@ class MultiOutputLSTM(nn.Module):
     def forward(self, x):
         lstm_out, _ = self.lstm(x)
         x = lstm_out[:, -1, :]
-        
-        x = self.bn1(x)  # ✅ Normalizar
+        x = self.bn1(x)
         x = self.fc1(x)
-        x = self.bn2(x)  # ✅ Normalizar
+        x = self.bn2(x)
         x = self.relu(x)
         x = self.dropout(x)
-        
         return self.fc2(x)
 
 
@@ -112,47 +101,36 @@ def detect_trend(df, window=20):
         return "SIDEWAYS"
 
 def generate_signal(pred_high, pred_low, pred_close, current_price, rsi, atr, trend):
-    """
-    Genera señal de trading basada en:
-    - Predicción del modelo
-    - RSI
-    - ATR (volatilidad)
-    - Tendencia
+    """Genera señal de trading"""
     
-    Returns:
-        dict con 'signal' (BUY/SELL/HOLD) y 'confidence' (0-100)
-    """
-    
-    # Calcular cambio predicho
     pred_change_pct = ((pred_close - current_price) / current_price) * 100
     
-    # Sistema de puntos para confianza
-    confidence_score = 50  # Base
+    confidence_score = 50
     signal = "HOLD"
     
-    # 1. PREDICCIÓN DEL MODELO (peso: 40%)
-    if pred_change_pct > 1.0:  # Predicción alcista fuerte
+    # 1. PREDICCIÓN DEL MODELO
+    if pred_change_pct > 1.0:
         signal = "BUY"
         confidence_score += min(pred_change_pct * 10, 30)
-    elif pred_change_pct < -1.0:  # Predicción bajista fuerte
+    elif pred_change_pct < -1.0:
         signal = "SELL"
         confidence_score += min(abs(pred_change_pct) * 10, 30)
     else:
-        confidence_score -= 20  # Predicción neutral
+        confidence_score -= 20
     
-    # 2. RSI (peso: 20%)
-    if rsi < 30:  # Sobreventa
+    # 2. RSI
+    if rsi < 30:
         if signal == "BUY":
             confidence_score += 15
         elif signal == "SELL":
             confidence_score -= 15
-    elif rsi > 70:  # Sobrecompra
+    elif rsi > 70:
         if signal == "SELL":
             confidence_score += 15
         elif signal == "BUY":
             confidence_score -= 15
     
-    # 3. TENDENCIA (peso: 20%)
+    # 3. TENDENCIA
     if trend == "UPTREND":
         if signal == "BUY":
             confidence_score += 10
@@ -164,15 +142,14 @@ def generate_signal(pred_high, pred_low, pred_close, current_price, rsi, atr, tr
         elif signal == "BUY":
             confidence_score -= 10
     
-    # 4. VOLATILIDAD con ATR (peso: 10%)
+    # 4. VOLATILIDAD
     volatility = (atr / current_price) * 100
-    if volatility > 2.0:  # Alta volatilidad
+    if volatility > 2.0:
         confidence_score -= 10
-    elif volatility < 0.5:  # Baja volatilidad
+    elif volatility < 0.5:
         confidence_score += 5
     
-    # 5. ALINEACIÓN DE PREDICCIONES (peso: 10%)
-    # Si High, Low y Close apuntan en misma dirección
+    # 5. ALINEACIÓN
     if pred_high > current_price and pred_low > current_price and pred_close > current_price:
         if signal == "BUY":
             confidence_score += 10
@@ -180,10 +157,8 @@ def generate_signal(pred_high, pred_low, pred_close, current_price, rsi, atr, tr
         if signal == "SELL":
             confidence_score += 10
     
-    # Limitar confianza entre 0-100
     confidence = max(0, min(100, confidence_score))
     
-    # Si confianza es muy baja, cambiar a HOLD
     if confidence < 55:
         signal = "HOLD"
         confidence = 50
@@ -198,9 +173,66 @@ def generate_signal(pred_high, pred_low, pred_close, current_price, rsi, atr, tr
         'trend': trend
     }
 
+
+def save_to_prediction_tracker(timestamp, current_price, pred_high, pred_low, pred_close, 
+                               signal, confidence, rsi, atr, trend):
+    """
+    🆕 NUEVO: Guarda predicción en CSV de tracking unificado
+    
+    Este CSV tendrá TODAS las predicciones y después se unirá con órdenes/resultados
+    """
+    
+    # Calcular cambios predichos
+    pred_high_change = ((pred_high - current_price) / current_price) * 100
+    pred_low_change = ((pred_low - current_price) / current_price) * 100
+    pred_close_change = ((pred_close - current_price) / current_price) * 100
+    
+    # Rango predicho
+    pred_range = pred_high - pred_low
+    pred_range_pct = (pred_range / current_price) * 100
+    
+    tracking_data = {
+        'timestamp': timestamp,
+        'current_price': round(current_price, 4),  # ✅ 4 decimales
+        'pred_high': round(pred_high, 4),           # ✅ 4 decimales
+        'pred_low': round(pred_low, 4),             # ✅ 4 decimales
+        'pred_close': round(pred_close, 4),         # ✅ 4 decimales
+        'pred_high_change_%': round(pred_high_change, 2),
+        'pred_low_change_%': round(pred_low_change, 2),
+        'pred_close_change_%': round(pred_close_change, 2),
+        'pred_range': round(pred_range, 4),         # ✅ 4 decimales
+        'pred_range_%': round(pred_range_pct, 2),
+        'signal': signal,
+        'confidence': round(confidence, 1),
+        'rsi': round(rsi, 1),
+        'atr': round(atr, 4),                       # ✅ 4 decimales
+        'trend': trend,
+        'order_opened': 'NO',  # Se actualizará si se abre orden
+        'order_id': None,
+        'entry_price': None,
+        'exit_price': None,
+        'pnl_usd': None,
+        'pnl_%': None,
+        'close_reason': None,
+        'actual_high': None,  # Se llenará después para comparar predicción
+        'actual_low': None,
+        'actual_close': None,
+        'pred_accuracy_%': None
+    }
+    
+    df_track = pd.DataFrame([tracking_data])
+    
+    if os.path.exists(PREDICTION_TRACKER_FILE):
+        df_track.to_csv(PREDICTION_TRACKER_FILE, mode='a', header=False, index=False)
+    else:
+        df_track.to_csv(PREDICTION_TRACKER_FILE, index=False)
+    
+    print(f"✅ Predicción guardada en {PREDICTION_TRACKER_FILE}")
+
+
 def main():
     print("="*70)
-    print("  🔮 PREDICCIÓN + FILTROS TÉCNICOS")
+    print("  🔮 PREDICCIÓN + FILTROS TÉCNICOS (4 DECIMALES)")
     print("="*70 + "\n")
     
     # 1. CARGAR MODELO
@@ -216,24 +248,20 @@ def main():
     print("📂 Cargando modelo...")
     
     try:
-        # Cargar configuración
         with open(f'{model_dir}/config_{interval}.json', 'r') as f:
             config = json.load(f)
         
         seq_len = config['seq_len']
         
-        # Cargar scalers
         scaler_in = joblib.load(f'{model_dir}/scaler_input_{interval}.pkl')
         scaler_out = joblib.load(f'{model_dir}/scaler_output_{interval}.pkl')
         
-        # ✅ Cargar modelo con parámetros correctos
         checkpoint = torch.load(
             f'{model_dir}/adausd_lstm_{interval}.pth', 
             map_location=torch.device('cpu'),
             weights_only=False
         )
         
-        # Obtener configuración del modelo guardado
         model_config = checkpoint.get('config', {})
         hidden_size = model_config.get('hidden', 192)
         num_layers = model_config.get('layers', 2)
@@ -243,7 +271,6 @@ def main():
         print(f"   Num Layers: {num_layers}")
         print(f"   Seq Length: {seq_len}")
         
-        # ✅ Crear modelo con arquitectura correcta
         model = MultiOutputLSTM(
             input_size=4,
             hidden_size=hidden_size,
@@ -276,7 +303,7 @@ def main():
         if 'time' in df.columns:
             df['time'] = pd.to_datetime(df['time']).dt.tz_localize(None)
         
-        df = df[['time', 'open', 'high', 'low', 'close']].tail(seq_len + 20)  # Extra para indicadores
+        df = df[['time', 'open', 'high', 'low', 'close']].tail(seq_len + 20)
         
         print(f"✅ {len(df)} velas descargadas\n")
         
@@ -286,14 +313,12 @@ def main():
         send_telegram(error_msg)
         return
     
-    # 3. PREPARAR SECUENCIA PARA PREDICCIÓN
+    # 3. PREPARAR SECUENCIA
     print("🔧 Preparando datos para predicción...")
     
     inp = df[['open', 'high', 'low', 'close']].values[-seq_len:]
     inp_scaled = scaler_in.transform(inp)
-    
-    # Convertir a tensor
-    X = torch.FloatTensor(inp_scaled).unsqueeze(0)  # [1, seq_len, 4]
+    X = torch.FloatTensor(inp_scaled).unsqueeze(0)
     
     # 4. GENERAR PREDICCIÓN
     print("🔮 Generando predicción...\n")
@@ -309,14 +334,14 @@ def main():
     print("="*70)
     print("  PREDICCIÓN")
     print("="*70)
-    print(f"Precio Actual:   ${current_price:.2f}")
-    print(f"Pred High:       ${pred_high:.2f}")
-    print(f"Pred Low:        ${pred_low:.2f}")
-    print(f"Pred Close:      ${pred_close:.2f}")
+    print(f"Precio Actual:   ${current_price:.4f}")   # ✅ 4 decimales
+    print(f"Pred High:       ${pred_high:.4f}")        # ✅ 4 decimales
+    print(f"Pred Low:        ${pred_low:.4f}")         # ✅ 4 decimales
+    print(f"Pred Close:      ${pred_close:.4f}")       # ✅ 4 decimales
     print(f"Cambio Pred:     {((pred_close - current_price) / current_price * 100):+.2f}%")
     print("="*70 + "\n")
     
-    # 5. CALCULAR INDICADORES TÉCNICOS
+    # 5. CALCULAR INDICADORES
     print("📊 Calculando indicadores técnicos...")
     
     rsi = calculate_rsi(df['close'].values)
@@ -324,7 +349,7 @@ def main():
     trend = detect_trend(df)
     
     print(f"RSI:        {rsi:.1f}")
-    print(f"ATR:        ${atr:.2f}")
+    print(f"ATR:        ${atr:.4f}")  # ✅ 4 decimales
     print(f"Tendencia:  {trend}\n")
     
     # 6. GENERAR SEÑAL
@@ -344,25 +369,32 @@ def main():
     print(f"🚦 Señal:      {signal}")
     print(f"🎲 Confianza:  {confidence:.1f}%")
     print(f"📈 RSI:        {result['rsi']:.1f}")
-    print(f"📊 ATR:        ${result['atr']:.2f}")
+    print(f"📊 ATR:        ${result['atr']:.4f}")  # ✅ 4 decimales
     print(f"📉 Volatilidad: {result['volatility_%']:.2f}%")
-    print(f"🔍 Tendencia:  {result['trend']}")
+    print(f"📍 Tendencia:  {result['trend']}")
     print("="*70 + "\n")
     
-    # 7. GUARDAR SEÑAL
+    # 7. GUARDAR EN prediction_tracker.csv
+    timestamp = datetime.now()
+    save_to_prediction_tracker(
+        timestamp, current_price, pred_high, pred_low, pred_close,
+        signal, confidence, rsi, atr, trend
+    )
+    
+    # 8. GUARDAR SEÑAL (CSV original)
     signal_data = {
-        'timestamp': datetime.now(),
-        'current_price': current_price,
-        'pred_high': pred_high,
-        'pred_low': pred_low,
-        'pred_close': pred_close,
-        'pred_change_%': result['pred_change_%'],
-        'atr': result['atr'],
-        'volatility': result['volatility_%'],
+        'timestamp': timestamp,
+        'current_price': round(current_price, 4),    # ✅ 4 decimales
+        'pred_high': round(pred_high, 4),            # ✅ 4 decimales
+        'pred_low': round(pred_low, 4),              # ✅ 4 decimales
+        'pred_close': round(pred_close, 4),          # ✅ 4 decimales
+        'pred_change_%': round(result['pred_change_%'], 2),
+        'atr': round(result['atr'], 4),              # ✅ 4 decimales
+        'volatility': round(result['volatility_%'], 2),
         'trend': result['trend'],
         'signal': signal,
-        'confidence': confidence,
-        'rsi': result['rsi']
+        'confidence': round(confidence, 1),
+        'rsi': round(result['rsi'], 1)
     }
     
     signals_file = 'trading_signals.csv'
@@ -375,25 +407,25 @@ def main():
     
     print(f"✅ Señal guardada en {signals_file}\n")
     
-    # 8. NOTIFICAR POR TELEGRAM
+    # 9. NOTIFICAR TELEGRAM
     emoji = "🟢" if signal == "BUY" else "🔴" if signal == "SELL" else "⚪"
     
     msg = f"""
 {emoji} *Nueva Señal: {signal}*
 
-💰 Precio: ${current_price:.2f}
-🔮 Pred Close: ${pred_close:.2f} ({result['pred_change_%']:+.2f}%)
+💰 Precio: ${current_price:.4f}
+🔮 Pred Close: ${pred_close:.4f} ({result['pred_change_%']:+.2f}%)
 🎲 Confianza: {confidence:.1f}%
 
 📊 *Indicadores:*
    RSI: {result['rsi']:.1f}
-   ATR: ${result['atr']:.2f}
+   ATR: ${result['atr']:.4f}
    Volatilidad: {result['volatility_%']:.2f}%
    Tendencia: {result['trend']}
 
-🔍 *Rango Predicho:*
-   High: ${pred_high:.2f}
-   Low: ${pred_low:.2f}
+📍 *Rango Predicho:*
+   High: ${pred_high:.4f}
+   Low: ${pred_low:.4f}
 """
     
     send_telegram(msg)
