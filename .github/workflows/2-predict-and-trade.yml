@@ -2,7 +2,7 @@ name: Predict & Trade
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Cada 5 minutos
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -20,19 +20,16 @@ jobs:
         id: check
         run: |
           if [ -d "ADAUSD_MODELS" ] && [ "$(ls -A ADAUSD_MODELS/*.keras 2>/dev/null)" ]; then
-            echo "Modelo encontrado"
             echo "has_model=true" >> $GITHUB_OUTPUT
           else
-            echo "No hay modelo entrenado aun"
             echo "has_model=false" >> $GITHUB_OUTPUT
           fi
       
       - name: Wait for model
         if: steps.check.outputs.has_model == 'false'
         run: |
-          echo "Esperando entrenamiento del modelo..."
-          echo "El modelo se entrena automaticamente 1 vez al dia"
-          echo "O puedes ejecutar manualmente el workflow 'Train Model'"
+          echo "Esperando modelo inicial..."
+          echo "Ejecuta 'Train Model' primero"
           exit 0
       
       - name: Setup Python
@@ -56,9 +53,8 @@ jobs:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          echo "Generando predicciones con LSTM..."
+          echo "Generando predicciones..."
           python predict_and_filter.py
-          echo "Predicciones generadas"
       
       - name: Execute trades
         if: steps.check.outputs.has_model == 'true'
@@ -68,10 +64,9 @@ jobs:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          echo "Ejecutando estrategia de trading..."
+          echo "Ejecutando estrategia..."
           python trading_orchestrator.py
-          echo "Ciclo de trading completado"
-      
+              
       - name: Save signals and orders
         if: steps.check.outputs.has_model == 'true'
         run: |
@@ -81,26 +76,9 @@ jobs:
           git add trading_signals.csv orders_executed.csv *.json 2>/dev/null || true
           
           if git diff --staged --quiet; then
-            echo "No hay nuevas senales/ordenes"
+            echo "No hay nuevos datos"
           else
-            timestamp=$(date -u +%H:%M)
-            git commit -m "Trading cycle $timestamp UTC"
+            git commit -m "Trading cycle $(date -u +%H:%M)"
             git push
-            echo "Senales y ordenes guardadas"
+            echo "Datos guardados"
           fi
-      
-      - name: Cycle summary
-        if: always()
-        run: |
-          echo ""
-          echo "===================================="
-          if [ "${{ steps.check.outputs.has_model }}" = "true" ]; then
-            echo "Ciclo completado exitosamente"
-            echo "   - Predicciones generadas"
-            echo "   - Estrategia ejecutada"
-            echo "   - Datos guardados"
-          else
-            echo "Esperando modelo inicial"
-            echo "   Ejecuta 'Train Model' primero"
-          fi
-          echo "===================================="
