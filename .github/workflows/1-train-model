@@ -1,8 +1,8 @@
-name: 🧠 Train Model
+name: Train Model
 
 on:
   schedule:
-    - cron: '0 2 * * *'  # 1 vez al día a las 2 AM UTC
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       force_train:
@@ -18,57 +18,54 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: 📥 Checkout
+      - name: Checkout
         uses: actions/checkout@v4
       
-      - name: 🔍 Check if training needed
+      - name: Check if training needed
         id: check
         run: |
-          echo "🔍 Verificando si necesita reentrenamiento..."
+          echo "Verificando si necesita reentrenamiento..."
           
-          # Siempre entrenar si es manual y force_train=true
           if [ "${{ github.event.inputs.force_train }}" = "true" ]; then
-            echo "🔄 Entrenamiento forzado"
+            echo "Entrenamiento forzado"
             echo "should_train=true" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          # Verificar si existe modelo
           if [ -d "ADAUSD_MODELS" ] && [ "$(ls -A ADAUSD_MODELS/*.keras 2>/dev/null)" ]; then
-            # Verificar antigüedad (reentrenar cada 7 días)
             last_train=$(find ADAUSD_MODELS -type f -name "*.keras" -printf '%T@\n' | sort -n | tail -1 2>/dev/null || echo "0")
             current_time=$(date +%s)
             age=$((current_time - ${last_train:-0}))
             days=$((age / 86400))
             
-            echo "📅 Modelo tiene $days días"
+            echo "Modelo tiene $days dias"
             
             if [ $days -gt 7 ]; then
-              echo "🔄 Reentrenamiento necesario (>7 días)"
+              echo "Reentrenamiento necesario (>7 dias)"
               echo "should_train=true" >> $GITHUB_OUTPUT
             else
-              echo "✅ Modelo vigente ($days días)"
+              echo "Modelo vigente ($days dias)"
               echo "should_train=false" >> $GITHUB_OUTPUT
             fi
           else
-            echo "⚠️ No existe modelo, entrenar"
+            echo "No existe modelo, entrenar"
             echo "should_train=true" >> $GITHUB_OUTPUT
           fi
       
-      - name: 🐍 Setup Python
+      - name: Setup Python
         if: steps.check.outputs.should_train == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
       
-      - name: 📦 Install dependencies
+      - name: Install dependencies
         if: steps.check.outputs.should_train == 'true'
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: 🧠 Train LSTM model
+      - name: Train LSTM model
         if: steps.check.outputs.should_train == 'true'
         env:
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
@@ -76,9 +73,9 @@ jobs:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          echo "🧠 Iniciando entrenamiento del modelo LSTM..."
+          echo "Iniciando entrenamiento del modelo LSTM..."
           python adausd_lstm.py
-          echo "✅ Entrenamiento completado"
+          echo "Entrenamiento completado"
       
       - name: Commit model
         if: steps.check.outputs.should_train == 'true'
