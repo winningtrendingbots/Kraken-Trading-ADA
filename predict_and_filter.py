@@ -178,8 +178,7 @@ def save_to_prediction_tracker(timestamp, current_price, pred_high, pred_low, pr
                                signal, confidence, rsi, atr, trend):
     """
     🆕 NUEVO: Guarda predicción en CSV de tracking unificado
-    
-    Este CSV tendrá TODAS las predicciones y después se unirá con órdenes/resultados
+    ✅ FIX: Sintaxis correcta + Conversión de tipos
     """
     
     # Calcular cambios predichos
@@ -191,10 +190,10 @@ def save_to_prediction_tracker(timestamp, current_price, pred_high, pred_low, pr
     pred_range = pred_high - pred_low
     pred_range_pct = (pred_range / current_price) * 100
     
+    # ✅ Diccionario con sintaxis correcta y conversión de tipos
     tracking_data = {
-        tracking_data = {
         'timestamp': timestamp,
-        'current_price': float(round(current_price, 4)),  # ✅ Agregar float()
+        'current_price': float(round(current_price, 4)),
         'pred_high': float(round(pred_high, 4)),
         'pred_low': float(round(pred_low, 4)),
         'pred_close': float(round(pred_close, 4)),
@@ -203,23 +202,23 @@ def save_to_prediction_tracker(timestamp, current_price, pred_high, pred_low, pr
         'pred_close_change_%': float(round(pred_close_change, 2)),
         'pred_range': float(round(pred_range, 4)),
         'pred_range_%': float(round(pred_range_pct, 2)),
-        'signal': str(signal),  # ✅ Agregar str()
+        'signal': str(signal),
         'confidence': float(round(confidence, 1)),
-        'rsi': float(round(rsi, 1)),  # ✅ Agregar float()
-        'atr': float(round(atr, 4)),  # ✅ Agregar float()
-        'trend': str(trend),  # ✅ Agregar str()
-        'order_opened': 'NO',  # Se actualizará si se abre orden
+        'rsi': float(round(rsi, 1)),
+        'atr': float(round(atr, 4)),
+        'trend': str(trend),
+        'order_opened': 'NO',
         'order_id': None,
         'entry_price': None,
         'exit_price': None,
         'pnl_usd': None,
         'pnl_%': None,
         'close_reason': None,
-        'actual_high': None,  # Se llenará después para comparar predicción
+        'actual_high': None,
         'actual_low': None,
         'actual_close': None,
         'pred_accuracy_%': None
-    }
+    }  # ✅ IMPORTANTE: Esta llave debe cerrarse correctamente
     
     df_track = pd.DataFrame([tracking_data])
     
@@ -385,7 +384,7 @@ def main():
     # 8. GUARDAR SEÑAL (CSV original)
     signal_data = {
         'timestamp': timestamp,
-        'current_price': float(round(current_price, 4)),  # ✅ float()
+        'current_price': float(round(current_price, 4)),
         'pred_high': float(round(pred_high, 4)),
         'pred_low': float(round(pred_low, 4)),
         'pred_close': float(round(pred_close, 4)),
@@ -395,8 +394,8 @@ def main():
         'trend': str(result['trend']),
         'signal': str(signal),
         'confidence': float(round(confidence, 1)),
-        'rsi': float(round(result['rsi'], 1))  # ✅ float()
-    }
+        'rsi': float(round(result['rsi'], 1))
+    }  # ✅ Esta llave también debe cerrarse correctamente
     
     signals_file = 'trading_signals.csv'
     df_signal = pd.DataFrame([signal_data])
