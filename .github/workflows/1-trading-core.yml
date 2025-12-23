@@ -5,7 +5,6 @@ on:
     - cron: '0 8 * * *'        # 🧠 Train diario 08:00 UTC
     - cron: '*/11 * * * *'     # 🔮 Predict + Trade cada 11 min
     - cron: '*/4 * * * *'      # 👁️ Monitor cada 4 min
-    - cron: '0 0 * * 0'        # 🔄 Keepalive semanal
 
   workflow_dispatch:
     inputs:
@@ -18,7 +17,6 @@ on:
           - predict_trade
           - monitor
           - all
-          - keepalive
 
 permissions:
   contents: write
@@ -29,31 +27,10 @@ concurrency:
 
 jobs:
 # ==========================================================
-# 🔄 KEEPALIVE - Mantiene el repo activo
-# ==========================================================
-  keepalive:
-    runs-on: ubuntu-latest
-    if: github.event.schedule == '0 0 * * 0'
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Keepalive commit
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Crear/actualizar archivo keepalive
-          echo "Last keepalive: $(date -u)" > .github/keepalive.txt
-          git add .github/keepalive.txt
-          git commit -m "🔄 Keepalive $(date -u +'%Y-%m-%d')" || echo "No changes"
-          git push origin main
-
-# ==========================================================
-# 🧠 DECIDIR QUÉ SE EJECUTA
+# 🧠 DECIDIR QUÉ SE EJECUTA (LÓGICA MEJORADA)
 # ==========================================================
   determine-task:
     runs-on: ubuntu-latest
-    if: github.event.schedule != '0 0 * * 0'
     outputs:
       should_train: ${{ steps.decide.outputs.should_train }}
       should_predict_trade: ${{ steps.decide.outputs.should_predict_trade }}
@@ -70,7 +47,11 @@ jobs:
           PREDICT_TRADE=false
           MONITOR=false
 
+          echo "⏰ Hora actual: $HOUR:$MIN UTC"
+          echo "🎯 Event: ${{ github.event_name }}"
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "📝 Manual trigger detected"
             case "${{ github.event.inputs.task }}" in
               train)
                 TRAIN=true
@@ -86,27 +67,34 @@ jobs:
                 PREDICT_TRADE=true
                 MONITOR=true
                 ;;
-              keepalive)
-                echo "Keepalive manual"
-                exit 0
-                ;;
             esac
           else
-            # 🧠 Train diario 08:00 UTC
-            if [ "$HOUR" = "08" ] && [ "$MIN" = "00" ]; then
+            # 🧠 Train diario ~08:00 UTC (tolerancia ±5 min)
+            if [ "$HOUR" = "08" ] && [ "$MIN" -ge 0 ] && [ "$MIN" -le 10 ]; then
+              echo "🧠 Train time detected"
               TRAIN=true
             fi
 
-            # 🔮 Predict + Trade cada 11 minutos
-            if (( MIN % 11 == 0 )); then
+            # 🔮 Predict + Trade: detectar por resto de división (más tolerante)
+            # En lugar de MIN % 11 == 0, usar rango ±2 minutos
+            REMAINDER=$((MIN % 11))
+            if [ "$REMAINDER" -le 2 ] || [ "$REMAINDER" -ge 9 ]; then
+              echo "🔮 Predict+Trade time detected (MIN=$MIN, remainder=$REMAINDER)"
               PREDICT_TRADE=true
             fi
 
-            # 👁️ Monitor cada 4 minutos
-            if (( MIN % 4 == 0 )); then
+            # 👁️ Monitor: detectar por resto de división (más tolerante)
+            REMAINDER=$((MIN % 4))
+            if [ "$REMAINDER" -le 1 ] || [ "$REMAINDER" -ge 3 ]; then
+              echo "👁️ Monitor time detected (MIN=$MIN, remainder=$REMAINDER)"
               MONITOR=true
             fi
           fi
+
+          echo "📊 Decisions:"
+          echo "  - Train: $TRAIN"
+          echo "  - Predict+Trade: $PREDICT_TRADE"
+          echo "  - Monitor: $MONITOR"
 
           echo "should_train=$TRAIN" >> $GITHUB_OUTPUT
           echo "should_predict_trade=$PREDICT_TRADE" >> $GITHUB_OUTPUT
@@ -181,7 +169,7 @@ jobs:
           echo "open_orders=$COUNT" >> $GITHUB_OUTPUT
 
           if [ "$COUNT" -gt 3 ]; then
-            echo "❌ Más de 3 órdenes abiertas, NO se tradea"
+            echo "❌ Más de 3 órdenes abiertas ($COUNT), NO se tradea"
             exit 0
           fi
 
@@ -204,7 +192,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add trading_signals.csv orders_executed.csv kraken_trades.csv open_orders.json prediction_tracker.csv || true
-          git commit -m "🔮 Predict & Trade $(date -u +'%H:%M')" || echo "No changes"
+          git commit -m "🔮 Trade $(date -u +'%H:%M')" || echo "No changes"
           git push origin main
 
 # ==========================================================
@@ -236,7 +224,10 @@ jobs:
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
           KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
         run: |
-          if [ ! -f open_orders.json ]; then exit 0; fi
+          if [ ! -f open_orders.json ]; then 
+            echo "No hay open_orders.json"
+            exit 0
+          fi
           python -c "from kraken_trader import monitor_orders; monitor_orders()"
 
       - name: Commit monitor updates
