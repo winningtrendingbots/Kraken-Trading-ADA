@@ -1,7 +1,7 @@
 name: 🔬 Test Baseline Comparison
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Ejecución manual
 
 permissions:
   contents: read
@@ -29,45 +29,45 @@ jobs:
       
       - name: ✅ Verify files exist
         run: |
-          echo "Verificando archivos necesarios..."
+          echo "🔍 Verificando archivos necesarios..."
           
           if [ ! -f "ADAUSD_1h_data.csv" ]; then
-            echo "ERROR: ADAUSD_1h_data.csv no existe"
+            echo "❌ ERROR: ADAUSD_1h_data.csv no existe"
             exit 1
           fi
           
           if [ ! -d "ADAUSD_MODELS" ]; then
-            echo "ERROR: ADAUSD_MODELS no existe"
+            echo "❌ ERROR: ADAUSD_MODELS/ no existe"
             exit 1
           fi
           
           if [ ! -f "ADAUSD_MODELS/adausd_lstm_1h.pth" ]; then
-            echo "ERROR: Modelo no existe"
+            echo "❌ ERROR: Modelo no existe"
             exit 1
           fi
           
-          echo "Todos los archivos presentes"
+          echo "✅ Todos los archivos críticos presentes"
       
       - name: 🔬 Run baseline comparison
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          echo "Ejecutando prueba de baseline..."
+          echo "🔬 Ejecutando prueba de baseline..."
           python baseline_comparison.py
       
       - name: 📊 Show results
         run: |
           echo ""
           echo "======================================================================"
-          echo "  RESULTADOS DE LA COMPARACION"
+          echo "  📊 RESULTADOS DE LA COMPARACIÓN"
           echo "======================================================================"
           echo ""
           
           if [ -f "baseline_comparison.json" ]; then
             cat baseline_comparison.json
           else
-            echo "No se genero baseline_comparison.json"
+            echo "⚠️ No se generó baseline_comparison.json"
           fi
       
       - name: 📤 Upload results
@@ -75,7 +75,8 @@ jobs:
         if: always()
         with:
           name: baseline-comparison-${{ github.run_number }}
-          path: baseline_comparison.json
+          path: |
+            baseline_comparison.json
           retention-days: 30
       
       - name: 📱 Send results to Telegram
@@ -84,72 +85,58 @@ jobs:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          if [ ! -f "baseline_comparison.json" ]; then
-            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
-              -d chat_id="${CHAT_ID}" \
-              -d text="Error: No se pudo generar comparacion de baseline"
-            exit 0
-          fi
-          
-          # Extraer metricas usando Python (mas confiable)
-          python3 << 'PYEOF'
-          import json
-          import os
-          import requests
-          
-          with open('baseline_comparison.json', 'r') as f:
-              data = json.load(f)
-          
-          lstm_r2 = data['lstm']['r2']
-          naive_r2 = data['naive']['r2']
-          lstm_dir = data['lstm']['direction_accuracy']
-          naive_dir = data['naive']['direction_accuracy']
-          r2_improve = data['improvement_over_naive']['r2']
-          dir_improve = data['improvement_over_naive']['direction']
-          
-          # Determinar veredicto
-          if r2_improve < 0.01 and dir_improve < 5:
-              verdict = "MODELO NO ES UTIL"
-              emoji = "❌"
-              recommendation = "Cambiar a prediccion 6h+ adelante"
-          elif r2_improve < 0.03 and dir_improve < 10:
-              verdict = "MARGINALMENTE UTIL"
-              emoji = "🟡"
-              recommendation = "Optimizar para direccion no MAE"
-          else:
-              verdict = "MODELO UTIL"
-              emoji = "✅"
-              recommendation = "Proceder a paper trading"
-          
-          # Construir mensaje
-          msg = f"""🔬 Comparacion LSTM vs Baseline
+          if [ -f "baseline_comparison.json" ]; then
+            # Extraer métricas clave
+            LSTM_R2=$(cat baseline_comparison.json | grep -A 5 '"lstm"' | grep '"r2"' | cut -d':' -f2 | cut -d',' -f1 | xargs)
+            NAIVE_R2=$(cat baseline_comparison.json | grep -A 5 '"naive"' | grep '"r2"' | cut -d':' -f2 | cut -d',' -f1 | xargs)
+            
+            LSTM_DIR=$(cat baseline_comparison.json | grep -A 6 '"lstm"' | grep '"direction_accuracy"' | cut -d':' -f2 | cut -d',' -f1 | xargs)
+            NAIVE_DIR=$(cat baseline_comparison.json | grep -A 6 '"naive"' | grep '"direction_accuracy"' | cut -d':' -f2 | cut -d',' -f1 | xargs)
+            
+            R2_IMPROVE=$(cat baseline_comparison.json | grep -A 2 '"improvement_over_naive"' | grep '"r2"' | cut -d':' -f2 | cut -d',' -f1 | xargs)
+            DIR_IMPROVE=$(cat baseline_comparison.json | grep -A 2 '"improvement_over_naive"' | grep '"direction"' | cut -d':' -f2 | cut -d'}' -f1 | xargs)
+            
+            # Determinar veredicto
+            if [ $(echo "$R2_IMPROVE < 0.01" | bc -l) -eq 1 ] && [ $(echo "$DIR_IMPROVE < 5" | bc -l) -eq 1 ]; then
+              VERDICT="MODELO NO ES UTIL"
+              EMOJI="❌"
+              RECOMMENDATION="Cambiar a prediccion 6h+ adelante"
+            elif [ $(echo "$R2_IMPROVE < 0.03" | bc -l) -eq 1 ] && [ $(echo "$DIR_IMPROVE < 10" | bc -l) -eq 1 ]; then
+              VERDICT="MARGINALMENTE UTIL"
+              EMOJI="🟡"
+              RECOMMENDATION="Optimizar para direccion no MAE"
+            else
+              VERDICT="MODELO UTIL"
+              EMOJI="✅"
+              RECOMMENDATION="Proceder a paper trading"
+            fi
+            
+            # Construir mensaje sin problemas de sintaxis
+            MSG="🔬 Comparacion LSTM vs Baseline
 
-#{emoji} {verdict}
+${EMOJI} ${VERDICT}
 
 📊 R2 Scores:
-   LSTM: {lstm_r2:.4f}
-   Naive: {naive_r2:.4f}
-   Mejora: +{r2_improve:.4f}
+   LSTM: ${LSTM_R2}
+   Naive: ${NAIVE_R2}
+   Mejora: +${R2_IMPROVE}
 
 🎯 Precision Direccional:
-   LSTM: {lstm_dir:.1f}%
-   Naive: {naive_dir:.1f}%
-   Mejora: +{dir_improve:.1f}%
+   LSTM: ${LSTM_DIR}%
+   Naive: ${NAIVE_DIR}%
+   Mejora: +${DIR_IMPROVE}%
 
 💡 Recomendacion:
-{recommendation}
+${RECOMMENDATION}
 
-📁 Ver detalles en Actions"""
-          
-          # Enviar a Telegram
-          telegram_api = os.environ.get('TELEGRAM_API')
-          chat_id = os.environ.get('CHAT_ID')
-          
-          if telegram_api and chat_id:
-              url = f"https://api.telegram.org/bot{telegram_api}/sendMessage"
-              requests.post(url, data={'chat_id': chat_id, 'text': msg}, timeout=10)
-              print("Mensaje enviado a Telegram")
-          else:
-              print("Telegram no configurado")
-              print(msg)
-          PYEOF
+📁 Ver detalles en Actions"
+            
+            # Enviar a Telegram
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
+              -d chat_id="${CHAT_ID}" \
+              -d text="${MSG}" || echo "⚠️ Telegram falló"
+          else
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
+              -d chat_id="${CHAT_ID}" \
+              -d text="❌ Error: No se pudo generar comparacion de baseline" || echo "⚠️ Telegram falló"
+          fi
