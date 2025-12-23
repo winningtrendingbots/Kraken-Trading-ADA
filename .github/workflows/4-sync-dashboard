@@ -1,0 +1,116 @@
+name: 🔄 Sync Dashboard
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Cada 5 minutos
+  push:
+    branches: [ main ]
+    paths:
+      - '*.csv'
+      - '*.json'
+      - '*.png'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout trading repo
+        uses: actions/checkout@v4
+        with:
+          path: trading
+      
+      - name: 📥 Checkout dashboard repo
+        uses: actions/checkout@v4
+        with:
+          repository: winningtrendingbots/winningtrendingbots.github.io
+          token: ${{ secrets.DASHBOARD_TOKEN }}
+          path: dashboard
+      
+      - name: 📋 Copy files to dashboard
+        run: |
+          echo "📋 Sincronizando archivos..."
+          
+          files_copied=0
+          
+          # Copiar CSVs
+          for file in trading/*.csv; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              # Solo copiar si tiene contenido real (más de 100 bytes)
+              if [ $(stat -f%z "$file" 2>/dev/null || stat -c%s "$file") -gt 100 ]; then
+                cp "$file" "dashboard/$filename"
+                echo "✅ $filename"
+                files_copied=$((files_copied + 1))
+              fi
+            fi
+          done
+          
+          # Copiar JSONs
+          for file in trading/*.json; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              cp "$file" "dashboard/$filename"
+              echo "✅ $filename"
+              files_copied=$((files_copied + 1))
+            fi
+          done
+          
+          # Copiar PNGs
+          for file in trading/*.png; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              cp "$file" "dashboard/$filename"
+              echo "✅ $filename"
+              files_copied=$((files_copied + 1))
+            fi
+          done
+          
+          echo ""
+          echo "📊 Archivos sincronizados: $files_copied"
+          
+          # Si no hay archivos, crear placeholders
+          if [ $files_copied -eq 0 ]; then
+            echo "⚠️ Creando placeholders iniciales..."
+            
+            echo "timestamp,txid,side,entry_price,close_price,volume,tp,sl,close_reason,time_open_min,pnl_usd,pnl_%" > dashboard/kraken_trades.csv
+            echo "timestamp,current_price,pred_high,pred_low,pred_close,pred_change_%,atr,volatility,trend,signal,confidence" > dashboard/trading_signals.csv
+            
+            echo "✅ Placeholders creados"
+          fi
+      
+      - name: 📊 Create metadata
+        run: |
+          cd dashboard
+          
+          csv_count=$(find . -maxdepth 1 -name "*.csv" -type f -size +100c 2>/dev/null | wc -l)
+          
+          cat > sync_metadata.json << EOF
+          {
+            "last_sync": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "source_repo": "winningtrendingbots/Kraken-Trading-ADA",
+            "files_synced": $csv_count,
+            "status": "$([ $csv_count -gt 0 ] && echo 'active' || echo 'initializing')",
+            "sync_frequency": "every_5_minutes"
+          }
+          EOF
+      
+      - name: 💾 Commit and push
+        run: |
+          cd dashboard
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add -A
+          
+          if git diff --staged --quiet; then
+            echo "ℹ️ No hay cambios"
+          else
+            git commit -m "🔄 Sync $(date -u +%H:%M) UTC"
+            git push
+            echo "✅ Dashboard actualizado"
+          fi
