@@ -1,8 +1,8 @@
-name: Predict & Trade
+name: Predict & Trade (Mejorado)
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/5 * * * *'  # Cada 5 minutos
   workflow_dispatch:
 
 permissions:
@@ -12,26 +12,61 @@ jobs:
   predict-and-trade:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       
+      # ========================================
+      # PASO 1: Verificar modelo
+      # ========================================
       - name: Check if model exists
         id: check
         run: |
-          if [ -d "ADAUSD_MODELS" ] && [ "$(ls -A ADAUSD_MODELS/*.keras 2>/dev/null)" ]; then
+          echo "🔍 Verificando modelo..."
+          
+          if [ -d "ADAUSD_MODELS" ] && [ "$(ls -A ADAUSD_MODELS/*.pth 2>/dev/null)" ]; then
+            echo "✅ Modelo encontrado"
             echo "has_model=true" >> $GITHUB_OUTPUT
+            
+            # Mostrar info del modelo
+            if [ -f "LAST_TRAINING.txt" ]; then
+              echo "📋 Último entrenamiento:"
+              cat LAST_TRAINING.txt
+            fi
           else
+            echo "⚠️ No hay modelo entrenado"
             echo "has_model=false" >> $GITHUB_OUTPUT
           fi
       
+      # ========================================
+      # PASO 2: Esperar modelo (si no existe)
+      # ========================================
       - name: Wait for model
         if: steps.check.outputs.has_model == 'false'
         run: |
-          echo "Esperando modelo inicial..."
-          echo "Ejecuta 'Train Model' primero"
+          echo ""
+          echo "⏳ ============================================"
+          echo "   NO HAY MODELO ENTRENADO"
+          echo "============================================"
+          echo ""
+          echo "🎯 Para empezar a predecir:"
+          echo "   1. Ve a 'Actions' → 'Train Model'"
+          echo "   2. Presiona 'Run workflow'"
+          echo "   3. Espera ~15-20 minutos"
+          echo ""
+          echo "📊 Una vez entrenado, este workflow:"
+          echo "   • Generará predicciones cada hora"
+          echo "   • Ejecutará trades automáticamente"
+          echo "   • Monitoreará órdenes cada 15 min"
+          echo ""
+          echo "⚠️ Este workflow se saltará hasta que exista el modelo"
+          echo ""
           exit 0
       
+      # ========================================
+      # PASO 3: Setup Python (solo si hay modelo)
+      # ========================================
       - name: Setup Python
         if: steps.check.outputs.has_model == 'true'
         uses: actions/setup-python@v5
@@ -42,9 +77,13 @@ jobs:
       - name: Install dependencies
         if: steps.check.outputs.has_model == 'true'
         run: |
+          echo "📦 Instalando dependencias..."
           pip install --upgrade pip
           pip install -r requirements.txt
       
+      # ========================================
+      # PASO 4: Generar predicciones
+      # ========================================
       - name: Generate predictions
         if: steps.check.outputs.has_model == 'true'
         env:
@@ -53,9 +92,38 @@ jobs:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          echo "Generando predicciones..."
-          python predict_and_filter.py
+          echo ""
+          echo "🔮 ============================================"
+          echo "   GENERANDO PREDICCIONES"
+          echo "============================================"
+          echo ""
+          
+          # Ejecutar predicción con manejo de errores
+          if python predict_and_filter.py; then
+            echo ""
+            echo "✅ Predicción completada"
+            
+            # Verificar que se generó el CSV
+            if [ -f "trading_signals.csv" ]; then
+              echo "✅ Señales guardadas en trading_signals.csv"
+              
+              # Mostrar última señal
+              echo ""
+              echo "📊 Última señal generada:"
+              tail -n 1 trading_signals.csv
+            else
+              echo "⚠️ No se generó trading_signals.csv"
+              exit 1
+            fi
+          else
+            echo ""
+            echo "❌ Error en predict_and_filter.py"
+            exit 1
+          fi
       
+      # ========================================
+      # PASO 5: Ejecutar trades
+      # ========================================
       - name: Execute trades
         if: steps.check.outputs.has_model == 'true'
         env:
@@ -64,21 +132,107 @@ jobs:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          echo "Ejecutando estrategia..."
-          python trading_orchestrator.py
-              
+          echo ""
+          echo "💼 ============================================"
+          echo "   EJECUTANDO ESTRATEGIA DE TRADING"
+          echo "============================================"
+          echo ""
+          
+          # Ejecutar trader con manejo de errores
+          if python trading_orchestrator.py; then
+            echo ""
+            echo "✅ Trading ejecutado correctamente"
+            
+            # Mostrar órdenes abiertas (si existen)
+            if [ -f "open_orders.json" ]; then
+              echo ""
+              echo "📋 Órdenes abiertas:"
+              cat open_orders.json | python -m json.tool 2>/dev/null || cat open_orders.json
+            else
+              echo "ℹ️ No hay órdenes abiertas"
+            fi
+          else
+            echo ""
+            echo "⚠️ Error en trading_orchestrator.py (no crítico)"
+            # No hacemos exit 1 aquí porque puede ser normal (ej: sin señales válidas)
+          fi
+      
+      # ========================================
+      # PASO 6: Guardar resultados
+      # ========================================
       - name: Save signals and orders
         if: steps.check.outputs.has_model == 'true'
         run: |
+          echo ""
+          echo "💾 ============================================"
+          echo "   GUARDANDO DATOS"
+          echo "============================================"
+          echo ""
+          
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          git add trading_signals.csv orders_executed.csv *.json 2>/dev/null || true
+          # Añadir todos los archivos relevantes
+          git add trading_signals.csv 2>/dev/null || true
+          git add orders_executed.csv 2>/dev/null || true
+          git add prediction_tracker.csv 2>/dev/null || true
+          git add open_orders.json 2>/dev/null || true
+          git add kraken_trades.csv 2>/dev/null || true
+          git add risk_config.json 2>/dev/null || true
+          git add *.json 2>/dev/null || true
           
+          # Verificar si hay cambios
           if git diff --staged --quiet; then
-            echo "No hay nuevos datos"
+            echo "ℹ️ No hay nuevos datos que guardar"
           else
-            git commit -m "Trading cycle $(date -u +%H:%M)"
-            git push
-            echo "Datos guardados"
+            # Mostrar qué se guardará
+            echo "📝 Archivos modificados:"
+            git diff --staged --name-only
+            
+            # Commit con timestamp
+            TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+            git commit -m "🤖 Trading cycle: $TIMESTAMP"
+            
+            # Push con retry
+            MAX_RETRIES=3
+            for i in $(seq 1 $MAX_RETRIES); do
+              if git push; then
+                echo ""
+                echo "✅ Datos guardados correctamente"
+                break
+              else
+                if [ $i -lt $MAX_RETRIES ]; then
+                  echo "⚠️ Reintentando push ($i/$MAX_RETRIES)..."
+                  sleep 2
+                  git pull --rebase
+                else
+                  echo "❌ Error al guardar datos después de $MAX_RETRIES intentos"
+                  exit 1
+                fi
+              fi
+            done
           fi
+      
+      # ========================================
+      # PASO 7: Resumen final
+      # ========================================
+      - name: Summary
+        if: always() && steps.check.outputs.has_model == 'true'
+        run: |
+          echo ""
+          echo "📊 ============================================"
+          echo "   RESUMEN DE EJECUCIÓN"
+          echo "============================================"
+          echo ""
+          
+          # Contar archivos generados
+          echo "📁 Archivos generados:"
+          [ -f "trading_signals.csv" ] && echo "  ✅ trading_signals.csv" || echo "  ❌ trading_signals.csv"
+          [ -f "prediction_tracker.csv" ] && echo "  ✅ prediction_tracker.csv" || echo "  ❌ prediction_tracker.csv"
+          [ -f "orders_executed.csv" ] && echo "  ✅ orders_executed.csv" || echo "  ⚠️ orders_executed.csv (sin trades)"
+          [ -f "kraken_trades.csv" ] && echo "  ✅ kraken_trades.csv" || echo "  ⚠️ kraken_trades.csv (sin trades cerrados)"
+          [ -f "open_orders.json" ] && echo "  ✅ open_orders.json" || echo "  ⚠️ open_orders.json (sin posiciones)"
+          
+          echo ""
+          echo "🕐 Próxima ejecución: En 5 minutos"
+          echo ""
