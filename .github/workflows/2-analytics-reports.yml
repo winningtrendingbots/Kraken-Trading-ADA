@@ -72,6 +72,7 @@ jobs:
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "📊 Generando análisis completo..."
           python analytics.py || {
@@ -97,6 +98,7 @@ jobs:
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "📅 Generando reporte diario..."
           python -c "
@@ -179,6 +181,7 @@ except Exception as e:
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "📅 Generando reporte semanal..."
           python -c "
@@ -188,7 +191,7 @@ import os
 import requests
 
 TELEGRAM_API = os.environ.get('TELEGRAM_API')
-CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
+CHAT_ID = os.environ.get('CHAT_ID')
 
 def send_telegram(msg):
     try:
@@ -261,6 +264,7 @@ except Exception as e:
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "🏥 Verificando salud del sistema..."
           
