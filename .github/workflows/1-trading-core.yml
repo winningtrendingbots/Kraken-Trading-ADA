@@ -3,7 +3,7 @@ name: 🤖 Trading Bot Core
 on:
   schedule:
     - cron: '0 8 * * *'      # Entrenar diario 9 AM UTC
-    - cron: '0 * * * *'      # Predicción + Trading cada hora
+    - cron: '*/15 * * * *'      # Predicción + Trading cada 15 minutos
     - cron: '*/5 * * * *'   # Monitoreo cada 5 minutos
   
   workflow_dispatch:
@@ -70,12 +70,12 @@ jobs:
             fi
             
             # Predicción cada hora
-            if [ "${{ github.event.schedule }}" = "0 * * * *" ]; then
+            if [ "${{ github.event.schedule }}" = */15 * * * *" ]; then
               PREDICT="true"
             fi
             
             # Monitoreo cada 15 min
-            if [ "${{ github.event.schedule }}" = "*/15 * * * *" ]; then
+            if [ "${{ github.event.schedule }}" = "*/5 * * * *" ]; then
               MONITOR="true"
             fi
           fi
