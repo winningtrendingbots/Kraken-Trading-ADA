@@ -25,7 +25,7 @@ OPEN_ORDERS_FILE = 'open_orders.json'
 PREDICTION_TRACKER_FILE = 'prediction_tracker.csv'  # 🆕 Nuevo archivo
 
 # 🔥 MODO DE OPERACIÓN
-LIVE_TRADING = False  # ⚠️ Cambiar a True para trading real
+LIVE_TRADING = True  # ⚠️ Cambiar a True para trading real
 
 def send_telegram(msg):
     if not TELEGRAM_API or not CHAT_ID:
