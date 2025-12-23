@@ -59,9 +59,9 @@ jobs:
       - name: 📊 Show results
         run: |
           echo ""
-          echo "="*70
+          echo "======================================================================"
           echo "  📊 RESULTADOS DE LA COMPARACIÓN"
-          echo "="*70
+          echo "======================================================================"
           echo ""
           
           if [ -f "baseline_comparison.json" ]; then
@@ -98,46 +98,45 @@ jobs:
             
             # Determinar veredicto
             if [ $(echo "$R2_IMPROVE < 0.01" | bc -l) -eq 1 ] && [ $(echo "$DIR_IMPROVE < 5" | bc -l) -eq 1 ]; then
-              VERDICT="🚨 MODELO NO ES ÚTIL"
+              VERDICT="MODELO NO ES UTIL"
               EMOJI="❌"
-              RECOMMENDATION="Cambiar a predicción 6h+ adelante"
+              RECOMMENDATION="Cambiar a prediccion 6h+ adelante"
             elif [ $(echo "$R2_IMPROVE < 0.03" | bc -l) -eq 1 ] && [ $(echo "$DIR_IMPROVE < 10" | bc -l) -eq 1 ]; then
-              VERDICT="⚠️ MARGINALMENTE ÚTIL"
+              VERDICT="MARGINALMENTE UTIL"
               EMOJI="🟡"
-              RECOMMENDATION="Optimizar para dirección, no MAE"
+              RECOMMENDATION="Optimizar para direccion no MAE"
             else
-              VERDICT="✅ MODELO ÚTIL"
+              VERDICT="MODELO UTIL"
               EMOJI="✅"
               RECOMMENDATION="Proceder a paper trading"
             fi
             
-            MSG="🔬 *Comparación LSTM vs Baseline*
+            # Construir mensaje sin problemas de sintaxis
+            MSG="🔬 Comparacion LSTM vs Baseline
 
-${EMOJI} *${VERDICT}*
+${EMOJI} ${VERDICT}
 
-📊 *R² Scores:*
+📊 R2 Scores:
    LSTM: ${LSTM_R2}
    Naive: ${NAIVE_R2}
    Mejora: +${R2_IMPROVE}
 
-🎯 *Precisión Direccional:*
+🎯 Precision Direccional:
    LSTM: ${LSTM_DIR}%
    Naive: ${NAIVE_DIR}%
    Mejora: +${DIR_IMPROVE}%
 
-💡 *Recomendación:*
+💡 Recomendacion:
 ${RECOMMENDATION}
 
-📁 Ver detalles en Actions → Artifacts
-"
+📁 Ver detalles en Actions"
             
+            # Enviar a Telegram
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
               -d chat_id="${CHAT_ID}" \
-              -d text="$MSG" \
-              -d parse_mode="Markdown" || echo "⚠️ Telegram falló"
+              -d text="${MSG}" || echo "⚠️ Telegram falló"
           else
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_API}/sendMessage" \
               -d chat_id="${CHAT_ID}" \
-              -d text="❌ Error: No se pudo generar comparación de baseline" \
-              -d parse_mode="Markdown" || echo "⚠️ Telegram falló"
+              -d text="❌ Error: No se pudo generar comparacion de baseline" || echo "⚠️ Telegram falló"
           fi
