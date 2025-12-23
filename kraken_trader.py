@@ -22,6 +22,7 @@ CHAT_ID = os.environ.get('CHAT_ID', '')
 # Archivos
 TRADES_FILE = 'kraken_trades.csv'
 OPEN_ORDERS_FILE = 'open_orders.json'
+PREDICTION_TRACKER_FILE = 'prediction_tracker.csv'  # 🆕 Nuevo archivo
 
 # 🔥 MODO DE OPERACIÓN
 LIVE_TRADING = True  # ⚠️ Cambiar a True para trading real
@@ -122,7 +123,7 @@ def get_current_price(retries=3, delay=2):
             if 'result' in data:
                 result_pair = list(data['result'].keys())[0]
                 price = float(data['result'][result_pair]['c'][0])
-                print(f"✅ Precio obtenido: ${price:.4f} (par: {result_pair})")
+                print(f"✅ Precio obtenido: ${price:.4f} (par: {result_pair})")  # ✅ 4 decimales
                 return price
             
             print(f"❌ No se encontró precio en la respuesta")
@@ -148,10 +149,7 @@ def get_balance():
     return result
 
 def get_margin_balance():
-    """
-    🆕 NUEVO: Obtiene balance de MARGIN WALLET (no Spot)
-    Para trading con leverage, el dinero DEBE estar aquí
-    """
+    """Obtiene balance de MARGIN WALLET"""
     print("\n" + "="*70)
     print("  💰 OBTENIENDO BALANCE DE MARGIN WALLET")
     print("="*70)
@@ -159,7 +157,6 @@ def get_margin_balance():
     balance = get_balance()
     
     if 'result' in balance:
-        # Kraken usa diferentes símbolos para monedas en margin
         margin_symbols = ['ZUSD', 'USD', 'ZEUR', 'EUR', 'USDT']
         
         total_margin = 0
@@ -170,7 +167,6 @@ def get_margin_balance():
             if amount_float > 0:
                 print(f"   {asset}: {amount_float:.2f}")
                 
-                # Sumar balance en USD/EUR
                 if asset in margin_symbols:
                     total_margin += amount_float
         
@@ -185,7 +181,6 @@ def get_margin_balance():
             print("   3. Mínimo: 10 EUR/USD para trading con leverage")
             print()
             
-            # Buscar fondos en Spot
             spot_balance = 0
             for asset, amount in balance['result'].items():
                 if asset not in margin_symbols:
@@ -215,7 +210,7 @@ def place_order(side, volume, price, tp_price, sl_price):
         'type': side,
         'volume': str(volume),
         'pair': pair,
-        'leverage': '10'  # Leverage 10x
+        'leverage': '10'
     }
     
     if price:
@@ -254,10 +249,94 @@ def calculate_tp_sl(entry_price, side, atr, pred_high, pred_low, tp_percentage=0
         tp = entry_price - (target_move * tp_percentage)
         sl = entry_price + (atr * 2)
     
-    return round(tp, 4), round(sl, 4)
+    return round(tp, 4), round(sl, 4)  # ✅ 4 decimales
+
+
+def update_prediction_tracker_on_order_open(timestamp, order_id, entry_price):
+    """
+    🆕 ACTUALIZA prediction_tracker.csv cuando se abre una orden
+    """
+    if not os.path.exists(PREDICTION_TRACKER_FILE):
+        print(f"⚠️ {PREDICTION_TRACKER_FILE} no existe aún")
+        return
+    
+    try:
+        df = pd.read_csv(PREDICTION_TRACKER_FILE)
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
+        # Buscar la última predicción (la más reciente)
+        latest_idx = df.index[-1]
+        
+        # Actualizar con datos de la orden
+        df.loc[latest_idx, 'order_opened'] = 'YES'
+        df.loc[latest_idx, 'order_id'] = order_id
+        df.loc[latest_idx, 'entry_price'] = round(entry_price, 4)  # ✅ 4 decimales
+        
+        # Guardar
+        df.to_csv(PREDICTION_TRACKER_FILE, index=False)
+        print(f"✅ {PREDICTION_TRACKER_FILE} actualizado: orden abierta")
+        
+    except Exception as e:
+        print(f"❌ Error actualizando tracker: {e}")
+
+
+def update_prediction_tracker_on_order_close(order_id, exit_price, pnl_usd, pnl_pct, 
+                                              close_reason, actual_high, actual_low, actual_close):
+    """
+    🆕 ACTUALIZA prediction_tracker.csv cuando se cierra una orden
+    Calcula precisión de la predicción
+    """
+    if not os.path.exists(PREDICTION_TRACKER_FILE):
+        print(f"⚠️ {PREDICTION_TRACKER_FILE} no existe")
+        return
+    
+    try:
+        df = pd.read_csv(PREDICTION_TRACKER_FILE)
+        
+        # Buscar la fila con este order_id
+        mask = df['order_id'] == order_id
+        
+        if not mask.any():
+            print(f"⚠️ Order {order_id} no encontrada en tracker")
+            return
+        
+        idx = df[mask].index[0]
+        
+        # Actualizar datos de cierre
+        df.loc[idx, 'exit_price'] = round(exit_price, 4)      # ✅ 4 decimales
+        df.loc[idx, 'pnl_usd'] = round(pnl_usd, 2)
+        df.loc[idx, 'pnl_%'] = round(pnl_pct, 2)
+        df.loc[idx, 'close_reason'] = close_reason
+        df.loc[idx, 'actual_high'] = round(actual_high, 4)    # ✅ 4 decimales
+        df.loc[idx, 'actual_low'] = round(actual_low, 4)      # ✅ 4 decimales
+        df.loc[idx, 'actual_close'] = round(actual_close, 4)  # ✅ 4 decimales
+        
+        # Calcular precisión de predicción
+        pred_high = df.loc[idx, 'pred_high']
+        pred_low = df.loc[idx, 'pred_low']
+        pred_close = df.loc[idx, 'pred_close']
+        
+        # Precisión = qué tan cerca estuvo la predicción
+        high_error = abs(pred_high - actual_high) / actual_high * 100
+        low_error = abs(pred_low - actual_low) / actual_low * 100
+        close_error = abs(pred_close - actual_close) / actual_close * 100
+        
+        avg_error = (high_error + low_error + close_error) / 3
+        accuracy = max(0, 100 - avg_error)
+        
+        df.loc[idx, 'pred_accuracy_%'] = round(accuracy, 2)
+        
+        # Guardar
+        df.to_csv(PREDICTION_TRACKER_FILE, index=False)
+        print(f"✅ {PREDICTION_TRACKER_FILE} actualizado: orden cerrada")
+        print(f"   Precisión predicción: {accuracy:.2f}%")
+        
+    except Exception as e:
+        print(f"❌ Error actualizando tracker: {e}")
+
 
 def monitor_orders():
-    """Monitorea órdenes abiertas y cierra por TP/SL/tiempo - CADA 15 MINUTOS"""
+    """Monitorea órdenes abiertas y cierra por TP/SL/tiempo"""
     if not os.path.exists(OPEN_ORDERS_FILE):
         print("ℹ️ No hay archivo de órdenes abiertas")
         return
@@ -327,8 +406,8 @@ def monitor_orders():
         if should_close:
             print(f"🔴 Cerrando orden {txid[:8]}... por {close_reason}")
             print(f"   Tiempo abierto: {time_open:.1f} min")
-            print(f"   Precio entrada: ${entry_price:.4f}")
-            print(f"   Precio cierre: ${close_price:.4f}")
+            print(f"   Precio entrada: ${entry_price:.4f}")  # ✅ 4 decimales
+            print(f"   Precio cierre: ${close_price:.4f}")   # ✅ 4 decimales
             
             # 🔥 CERRAR EN KRAKEN SI LIVE_TRADING
             if LIVE_TRADING:
@@ -345,6 +424,19 @@ def monitor_orders():
                 pnl = (entry_price - close_price) * volume
                 pnl_pct = ((entry_price - close_price) / entry_price) * 100
             
+            # 🆕 OBTENER DATOS REALES (High, Low, Close) para comparar con predicción
+            # En producción, esto vendría de datos históricos
+            # Por simplicidad, usamos close_price como aproximación
+            actual_high = close_price * 1.001  # Aprox
+            actual_low = close_price * 0.999
+            actual_close = close_price
+            
+            # 🆕 ACTUALIZAR PREDICTION TRACKER
+            update_prediction_tracker_on_order_close(
+                txid, close_price, pnl, pnl_pct, close_reason,
+                actual_high, actual_low, actual_close
+            )
+            
             # Actualizar capital y liberar margen
             risk_manager.update_after_trade(pnl, margin_released=margin_reserved)
             
@@ -353,15 +445,15 @@ def monitor_orders():
                 'timestamp': datetime.now(),
                 'txid': txid,
                 'side': side,
-                'entry_price': entry_price,
-                'close_price': close_price,
+                'entry_price': round(entry_price, 4),    # ✅ 4 decimales
+                'close_price': round(close_price, 4),    # ✅ 4 decimales
                 'volume': volume,
-                'tp': tp,
-                'sl': sl,
+                'tp': round(tp, 4),                      # ✅ 4 decimales
+                'sl': round(sl, 4),                      # ✅ 4 decimales
                 'close_reason': close_reason,
-                'time_open_min': time_open,
-                'pnl_usd': pnl,
-                'pnl_%': pnl_pct
+                'time_open_min': round(time_open, 1),
+                'pnl_usd': round(pnl, 2),
+                'pnl_%': round(pnl_pct, 2)
             }
             
             df = pd.DataFrame([trade_data])
@@ -408,10 +500,9 @@ def monitor_orders():
     else:
         print("✅ Todas las órdenes fueron cerradas")
 
+
 def execute_signal():
-    """
-    🆕 VERSIÓN MEJORADA: Lee señal Y sincroniza con balance REAL de Kraken
-    """
+    """Lee señal Y sincroniza con balance REAL de Kraken"""
     
     signals_file = 'trading_signals.csv'
     if not os.path.exists(signals_file):
@@ -424,7 +515,7 @@ def execute_signal():
     signal = latest['signal']
     
     if signal == 'HOLD':
-        print("⏸️ Señal HOLD - No hay acción")
+        print("⸻ Señal HOLD - No hay acción")
         return
     
     # ✅ PASO 1: Obtener Risk Manager
@@ -436,7 +527,7 @@ def execute_signal():
     print("="*70)
     
     if LIVE_TRADING:
-        kraken_balance = get_margin_balance()  # 🆕 Lee MARGIN wallet
+        kraken_balance = get_margin_balance()
         
         if kraken_balance <= 0:
             error_msg = """
@@ -454,7 +545,6 @@ Para usar leverage 10x necesitas:
             send_telegram(error_msg)
             return
         
-        # Sincronizar
         risk_manager.sync_with_kraken_balance(kraken_balance)
         print(f"✅ Balance sincronizado: ${kraken_balance:.2f}")
     else:
@@ -462,7 +552,7 @@ Para usar leverage 10x necesitas:
     
     risk_manager.print_stats()
     
-    # Verificar si ya hay una orden abierta
+    # ✅ VERIFICAR SOLO 1 ORDEN A LA VEZ
     if os.path.exists(OPEN_ORDERS_FILE):
         with open(OPEN_ORDERS_FILE, 'r') as f:
             open_orders = json.load(f)
@@ -497,8 +587,8 @@ Para usar leverage 10x necesitas:
         return
     
     print(f"✅ R/R Ratio: {trade_validation['rr_ratio']:.2f}")
-    print(f"   Risk: ${trade_validation['risk']:.4f}")
-    print(f"   Reward: ${trade_validation['reward']:.4f}")
+    print(f"   Risk: ${trade_validation['risk']:.4f}")    # ✅ 4 decimales
+    print(f"   Reward: ${trade_validation['reward']:.4f}")  # ✅ 4 decimales
     
     # Calcular posición con leverage 10x
     position = risk_manager.calculate_position_size(current_price, sl, confidence, side, use_leverage=True)
@@ -515,15 +605,15 @@ Para usar leverage 10x necesitas:
     print(f"🚀 EJECUTANDO ORDEN CON LEVERAGE 10X")
     print(f"{'='*70}")
     print(f"📊 Señal: {signal}")
-    print(f"💰 Precio: ${current_price:.4f}")
+    print(f"💰 Precio: ${current_price:.4f}")  # ✅ 4 decimales
     print(f"📈 Volumen: {volume} ADA (${position['position_value']:.2f})")
     print(f"   • Leverage: {position['leverage']}x")
     print(f"   • Riesgo: ${position['risk_amount']:.2f}")
     print(f"   • Margen Req: ${position['margin_required']:.2f}")
     print(f"   • Capital usado: {position['capital_used_%']:.1f}%")
-    print(f"🎯 TP: ${tp:.4f} ({((tp-current_price)/current_price*100):+.2f}%)")
-    print(f"🛑 SL: ${sl:.4f} ({((sl-current_price)/current_price*100):+.2f}%)")
-    print(f"⚠️ Liquidación: ${position['liquidation_price']:.4f}")
+    print(f"🎯 TP: ${tp:.4f} ({((tp-current_price)/current_price*100):+.2f}%)")  # ✅ 4 decimales
+    print(f"🛑 SL: ${sl:.4f} ({((sl-current_price)/current_price*100):+.2f}%)")  # ✅ 4 decimales
+    print(f"⚠️ Liquidación: ${position['liquidation_price']:.4f}")  # ✅ 4 decimales
     print(f"📊 R/R: {trade_validation['rr_ratio']:.2f}")
     print(f"🎲 Confianza: {confidence:.1f}%")
     print(f"{'='*70}\n")
@@ -537,6 +627,10 @@ Para usar leverage 10x necesitas:
             txid = result['result']['txid'][0]
             print(f"✅ Orden ejecutada en Kraken: {txid}")
             
+            # 🆕 ACTUALIZAR PREDICTION TRACKER
+            timestamp = latest['timestamp']
+            update_prediction_tracker_on_order_open(timestamp, txid, current_price)
+            
             # Reservar margen
             risk_manager.reserve_margin(position['margin_required'])
             
@@ -544,17 +638,17 @@ Para usar leverage 10x necesitas:
             order_data = {
                 'txid': txid,
                 'side': side,
-                'entry_price': current_price,
+                'entry_price': round(current_price, 4),  # ✅ 4 decimales
                 'volume': volume,
-                'tp': tp,
-                'sl': sl,
+                'tp': round(tp, 4),                      # ✅ 4 decimales
+                'sl': round(sl, 4),                      # ✅ 4 decimales
                 'open_time': datetime.now().isoformat(),
                 'signal_confidence': confidence,
                 'rr_ratio': trade_validation['rr_ratio'],
                 'risk_amount': position['risk_amount'],
                 'margin_required': position['margin_required'],
                 'leverage': position['leverage'],
-                'liquidation_price': position['liquidation_price']
+                'liquidation_price': round(position['liquidation_price'], 4)  # ✅ 4 decimales
             }
             
             orders = []
@@ -571,10 +665,10 @@ Para usar leverage 10x necesitas:
                 'timestamp': datetime.now(),
                 'txid': txid,
                 'side': side,
-                'entry_price': current_price,
+                'entry_price': round(current_price, 4),  # ✅ 4 decimales
                 'volume': volume,
-                'tp': tp,
-                'sl': sl,
+                'tp': round(tp, 4),                      # ✅ 4 decimales
+                'sl': round(sl, 4),                      # ✅ 4 decimales
                 'confidence': confidence,
                 'rr_ratio': trade_validation['rr_ratio'],
                 'risk_amount': position['risk_amount'],
@@ -618,36 +712,12 @@ Para usar leverage 10x necesitas:
         else:
             error = result.get('error', 'Unknown error')
             print(f"❌ Error al ejecutar orden: {error}")
-            
-            # Diagnóstico del error
-            if "Insufficient initial margin" in str(error):
-                diagnostic_msg = f"""
-❌ *Error: Margen Insuficiente*
-
-Balance detectado: ${risk_manager.current_capital:.2f}
-Margen requerido: ${position['margin_required']:.2f}
-
-⚠️ POSIBLES CAUSAS:
-1️⃣ Fondos en Spot Wallet (no Margin)
-2️⃣ Balance real < Balance en script
-3️⃣ Leverage no disponible para ADA
-
-📋 SOLUCIÓN:
-• Transfiere fondos a Margin Wallet
-• Verifica en Kraken.com tu balance real
-• Revisa que tengas permisos de margin trading
-"""
-                print(diagnostic_msg)
-                send_telegram(diagnostic_msg)
-            else:
-                send_telegram(f"❌ Error ejecutando orden: {error}")
+            send_telegram(f"❌ Error ejecutando orden: {error}")
     
     else:
-        # MODO SIMULACIÓN (igual que antes)
         print("💼 MODO SIMULACIÓN - Orden NO enviada a Kraken")
         print("   ⚠️ Para activar trading real, cambiar LIVE_TRADING = True")
-        
-        # ... resto del código de simulación ...
+
 
 def main():
     mode = "🔥 LIVE TRADING" if LIVE_TRADING else "💼 SIMULACIÓN"
