@@ -39,8 +39,8 @@ Thumbs.db
 !adausd_results.png
 !trading_analytics.png
 !LAST_TRAINING.txt
+!risk_config.json
+!prediction_tracker.csv
 
-# Ignorar OTROS archivos temporales de Python
+# Ignorar OTROS archivos de Python
 # pero NO los del modelo
-*.log
-.DS_Store
