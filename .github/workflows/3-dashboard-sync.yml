@@ -315,6 +315,7 @@ HTMLEOF
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           URL="https://winningtrendingbots.github.io/"
           
