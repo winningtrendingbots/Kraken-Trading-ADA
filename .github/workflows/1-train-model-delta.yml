@@ -200,30 +200,30 @@ jobs:
               echo ""
               echo "📊 Resumen de métricas:"
               python3 << 'PYEOF'
-import json
-try:
-    with open('ADAUSD_MODELS/config_hybrid.json', 'r') as f:
-        config = json.load(f)
-    
-    metrics = config.get('metrics_test', {})
-    if metrics:
-        print("   delta_high  R²:", f"{metrics.get('delta_high', {}).get('R2', 0):.4f}")
-        print("   delta_low   R²:", f"{metrics.get('delta_low', {}).get('R2', 0):.4f}")
-        print("   delta_close R²:", f"{metrics.get('delta_close', {}).get('R2', 0):.4f}")
-        
-        avg_r2 = sum(m.get('R2', 0) for m in metrics.values()) / len(metrics)
-        print(f"\n   📈 R² promedio: {avg_r2:.4f}")
-        
-        if 'training_time_minutes' in config:
-            print(f"   ⏱️  Tiempo: {config['training_time_minutes']:.1f} min")
-        
-        if 'total_epochs' in config:
-            print(f"   🔄 Épocas: {config['total_epochs']}")
-except:
-    pass
-PYEOF
-            fi
-          else
-            echo "  ℹ️ ENTRENAMIENTO NO NECESARIO"
-          fi
+            import json
+            try:
+                with open('ADAUSD_MODELS/config_hybrid.json', 'r') as f:
+                    config = json.load(f)
+                
+                metrics = config.get('metrics_test', {})
+                if metrics:
+                    print("   delta_high  R²:", f"{metrics.get('delta_high', {}).get('R2', 0):.4f}")
+                    print("   delta_low   R²:", f"{metrics.get('delta_low', {}).get('R2', 0):.4f}")
+                    print("   delta_close R²:", f"{metrics.get('delta_close', {}).get('R2', 0):.4f}")
+                    
+                    avg_r2 = sum(m.get('R2', 0) for m in metrics.values()) / len(metrics)
+                    print(f"\n   📈 R² promedio: {avg_r2:.4f}")
+                    
+                    if 'training_time_minutes' in config:
+                        print(f"   ⏱️  Tiempo: {config['training_time_minutes']:.1f} min")
+                    
+                    if 'total_epochs' in config:
+                        print(f"   🔄 Épocas: {config['total_epochs']}")
+            except:
+                pass
+            PYEOF
+                        fi
+                      else
+                        echo "  ℹ️ ENTRENAMIENTO NO NECESARIO"
+                      fi
           echo "╚═══════════════════════════════════════════════════════════════════╝"
