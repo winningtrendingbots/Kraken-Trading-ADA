@@ -411,7 +411,17 @@ def prepare_improved_dataset(df):
     df_val = df.iloc[train_end:val_end].copy()
     df_test = df.iloc[val_end:].copy()
     
-    # 6. Normalización separada
+    # 6. Guardar precios de cierre originales (sin normalizar)
+    close_prices_train = df_train['close'].values
+    close_prices_val = df_val['close'].values
+    close_prices_test = df_test['close'].values
+    
+    print(f"\n💰 Precios de cierre originales:")
+    print(f"   Train: {len(close_prices_train):,}")
+    print(f"   Val:   {len(close_prices_val):,}")
+    print(f"   Test:  {len(close_prices_test):,}")
+    
+    # 7. Normalización separada
     scaler_in = RobustScaler()
     scaler_out = MinMaxScaler()
     
@@ -423,25 +433,34 @@ def prepare_improved_dataset(df):
     y_val = scaler_out.transform(df_val[target_cols])
     y_test = scaler_out.transform(df_test[target_cols])
     
-    # 7. Crear secuencias
-    def create_sequences(X, y, seq_len):
+    # 8. Crear secuencias
+    def create_sequences(X, y, seq_len, close_prices=None):
         X_seq, y_seq = [], []
+        close_seq = [] if close_prices is not None else None
+        
         for i in range(seq_len, len(X)):
             X_seq.append(X[i-seq_len:i])
             y_seq.append(y[i])
+            if close_prices is not None:
+                # Tomar el precio de cierre en la posición i-1 (última vela de la secuencia)
+                close_seq.append(close_prices[i-1])
+        
+        if close_prices is not None:
+            return np.array(X_seq), np.array(y_seq), np.array(close_seq)
         return np.array(X_seq), np.array(y_seq)
     
-    X_train_seq, y_train_seq = create_sequences(X_train, y_train, Config.SEQ_LEN)
-    X_val_seq, y_val_seq = create_sequences(X_val, y_val, Config.SEQ_LEN)
-    X_test_seq, y_test_seq = create_sequences(X_test, y_test, Config.SEQ_LEN)
+    # Crear secuencias con close_prices
+    X_train_seq, y_train_seq, close_train_seq = create_sequences(X_train, y_train, Config.SEQ_LEN, close_prices_train)
+    X_val_seq, y_val_seq, close_val_seq = create_sequences(X_val, y_val, Config.SEQ_LEN, close_prices_val)
+    X_test_seq, y_test_seq, close_test_seq = create_sequences(X_test, y_test, Config.SEQ_LEN, close_prices_test)
     
     print(f"\n📊 Conjuntos de datos:")
-    print(f"   Train: X{X_train_seq.shape}, y{y_train_seq.shape}")
-    print(f"   Val:   X{X_val_seq.shape}, y{y_val_seq.shape}")
-    print(f"   Test:  X{X_test_seq.shape}, y{y_test_seq.shape}")
+    print(f"   Train: X{X_train_seq.shape}, y{y_train_seq.shape}, close{close_train_seq.shape}")
+    print(f"   Val:   X{X_val_seq.shape}, y{y_val_seq.shape}, close{close_val_seq.shape}")
+    print(f"   Test:  X{X_test_seq.shape}, y{y_test_seq.shape}, close{close_test_seq.shape}")
     
     return (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
-           scaler_in, scaler_out, feature_cols, target_cols
+           scaler_in, scaler_out, feature_cols, target_cols, close_test_seq
 
 def prepare_delta_dataset(df):
     """
@@ -1127,9 +1146,20 @@ def evaluate_improved_model(model, test_loader, scaler_out, close_prices, device
     predictions_abs = scaler_out.inverse_transform(predictions)
     targets_abs = scaler_out.inverse_transform(targets)
     
+    # Verificar dimensiones
+    print(f"📊 Dimensiones:")
+    print(f"   Predictions: {predictions_abs.shape}")
+    print(f"   Targets: {targets_abs.shape}")
+    print(f"   Close prices: {close_prices.shape}")
+    
+    # Asegurar que close_prices tenga la misma longitud
+    if len(close_prices) != len(predictions_abs):
+        print(f"⚠️  Ajustando dimensiones: close_prices {len(close_prices)} -> {len(predictions_abs)}")
+        close_prices = close_prices[:len(predictions_abs)]
+    
     # Calcular deltas
-    predictions_delta = (predictions_abs - close_prices) / close_prices
-    targets_delta = (targets_abs - close_prices) / close_prices
+    predictions_delta = (predictions_abs - close_prices[:, np.newaxis]) / close_prices[:, np.newaxis]
+    targets_delta = (targets_abs - close_prices[:, np.newaxis]) / close_prices[:, np.newaxis]
     
     # Métricas
     metrics = {}
@@ -1138,10 +1168,14 @@ def evaluate_improved_model(model, test_loader, scaler_out, close_prices, device
         rmse = np.sqrt(mean_squared_error(targets_delta[:, i], predictions_delta[:, i]))
         r2 = r2_score(targets_delta[:, i], predictions_delta[:, i])
         
-        # Accuracy direccional
-        direction_true = np.sign(targets_delta[:, i])
-        direction_pred = np.sign(predictions_delta[:, i])
-        accuracy = np.mean(direction_true == direction_pred) * 100
+        # Accuracy direccional (ignorar valores cercanos a cero)
+        valid_mask = np.abs(targets_delta[:, i]) > 1e-6
+        if np.sum(valid_mask) > 0:
+            direction_true = np.sign(targets_delta[valid_mask, i])
+            direction_pred = np.sign(predictions_delta[valid_mask, i])
+            accuracy = np.mean(direction_true == direction_pred) * 100
+        else:
+            accuracy = 0.0
         
         metrics[name] = {
             'MAE': float(mae),
@@ -1151,8 +1185,8 @@ def evaluate_improved_model(model, test_loader, scaler_out, close_prices, device
         }
         
         print(f"\n📊 {name}:")
-        print(f"   MAE:  {mae:.6f}")
-        print(f"   RMSE: {rmse:.6f}")
+        print(f"   MAE:  {mae:.6f} ({mae*100:.4f}%)")
+        print(f"   RMSE: {rmse:.6f} ({rmse*100:.4f}%)")
         print(f"   R²:   {r2:.4f}")
         print(f"   Accuracy Direccional: {accuracy:.2f}%")
     
@@ -1301,9 +1335,6 @@ def plot_training_history(train_losses, val_losses, metrics, predictions, target
 # ================================
 # 🚀 MAIN
 # ================================
-# ================================
-# 🚀 MAIN MEJORADO
-# ================================
 def main():
     try:
         print("\n" + "="*70)
@@ -1326,10 +1357,15 @@ def main():
         
         # 2. Preparar dataset mejorado
         (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
-        scaler_in, scaler_out, feature_cols, target_cols = prepare_improved_dataset(df)
+        scaler_in, scaler_out, feature_cols, target_cols, close_prices = prepare_improved_dataset(df)
         
         input_size = len(feature_cols)
         output_size = len(target_cols)
+        
+        print(f"\n📊 Dimensiones:")
+        print(f"   Input size: {input_size}")
+        print(f"   Output size: {output_size}")
+        print(f"   Close prices para test: {len(close_prices)}")
         
         # 3. Dataloaders
         train_dataset = torch.utils.data.TensorDataset(
@@ -1364,22 +1400,57 @@ def main():
             dropout=Config.DROPOUT
         ).to(device)
         
+        total_params = sum(p.numel() for p in model.parameters())
+        print(f"\n🧠 Modelo creado: {total_params:,} parámetros")
+        
         # 5. Entrenar
         start_time = time.time()
         train_losses, val_losses = train_improved_model(model, train_loader, val_loader, device)
         training_time = time.time() - start_time
+        
+        print(f"\n⏱️  Tiempo de entrenamiento: {training_time/60:.1f} minutos")
+        print(f"📉 Mejor val loss: {min(val_losses):.6f}")
         
         # 6. Evaluar
         predictions, targets, metrics = evaluate_improved_model(
             model, test_loader, scaler_out, close_prices, device
         )
         
-        print(f"\n✅ Entrenamiento completado en {training_time/60:.1f} minutos")
+        # 7. Mostrar resultados
+        print("\n" + "="*70)
+        print("  📈 RESULTADOS FINALES")
+        print("="*70)
+        
+        avg_r2 = np.mean([metrics[t]['R2'] for t in metrics.keys()])
+        avg_accuracy = np.mean([metrics[t]['Direction_Accuracy'] for t in metrics.keys()])
+        
+        print(f"\n📊 Métricas promedio:")
+        print(f"   R² promedio: {avg_r2:.4f}")
+        print(f"   Accuracy direccional promedio: {avg_accuracy:.2f}%")
+        
+        # 8. Guardar modelo (opcional)
+        model_dir = 'ADAUSD_MODELS_OPTIMIZED'
+        os.makedirs(model_dir, exist_ok=True)
+        
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'config': {
+                'input_size': input_size,
+                'hidden_size': Config.HIDDEN_SIZE,
+                'num_layers': Config.NUM_LAYERS,
+                'output_size': output_size,
+                'seq_len': Config.SEQ_LEN
+            },
+            'metrics': metrics,
+            'scaler_in': scaler_in,
+            'scaler_out': scaler_out
+        }, f'{model_dir}/adausd_optimized_lstm.pth')
+        
+        print(f"\n💾 Modelo guardado en '{model_dir}/adausd_optimized_lstm.pth'")
         
     except Exception as e:
         print(f"\n❌ Error: {str(e)}")
         import traceback
         traceback.print_exc()
-
 if __name__ == "__main__":
     main()
