@@ -50,17 +50,17 @@ jobs:
               echo "📊 Información del modelo:"
               python3 << 'PYEOF'
               import json
-try:
-    with open('ADAUSD_MODELS/training_summary.json', 'r') as f:
-        data = json.load(f)
-    print(f"  Entrenado: {data.get('timestamp', 'N/A')}")
-    if 'overfitting_diagnosis' in data:
-        diag = data['overfitting_diagnosis']
-        print(f"  Gap Train-Test: {diag.get('gap_train_test', 'N/A')}")
-        print(f"  Status: {diag.get('status', 'N/A')}")
-except:
-    print("  (No se pudo parsear summary)")
-PYEOF
+            try:
+                with open('ADAUSD_MODELS/training_summary.json', 'r') as f:
+                    data = json.load(f)
+                print(f"  Entrenado: {data.get('timestamp', 'N/A')}")
+                if 'overfitting_diagnosis' in data:
+                    diag = data['overfitting_diagnosis']
+                    print(f"  Gap Train-Test: {diag.get('gap_train_test', 'N/A')}")
+                    print(f"  Status: {diag.get('status', 'N/A')}")
+            except:
+                print("  (No se pudo parsear summary)")
+            PYEOF
             fi
           else
             echo "⚠️ No hay modelo entrenado"
