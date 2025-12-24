@@ -1,4 +1,4 @@
-name: 🤖 Train Model (Delta + Volume)
+name: 🤖 Train Hybrid Model
 
 on:
   schedule:
@@ -9,53 +9,47 @@ on:
         description: 'Forzar reentrenamiento'
         type: boolean
         default: false
-      use_legacy_model:
-        description: 'Usar modelo antiguo (sin deltas)'
-        type: boolean
-        default: false
 
 permissions:
   contents: write
 
 jobs:
-  train:
+  train-hybrid:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
       
-      - name: 🔍 Check if training needed
+      - name: 🔍 Check model age
         id: check
         run: |
-          echo "Verificando si necesita reentrenamiento..."
+          echo "Verificando edad del modelo..."
           
-          # Forzar entrenamiento si se solicita
           if [ "${{ github.event.inputs.force_train }}" = "true" ]; then
             echo "🔧 Entrenamiento forzado"
             echo "should_train=true" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          # Verificar edad del modelo
-          if [ -d "ADAUSD_MODELS" ] && [ "$(ls -A ADAUSD_MODELS/*delta.pth 2>/dev/null)" ]; then
-            last_train=$(find ADAUSD_MODELS -type f -name "*delta.pth" -printf '%T@\n' | sort -n | tail -1 2>/dev/null || echo "0")
+          if [ -d "ADAUSD_MODELS" ] && [ -f "ADAUSD_MODELS/adausd_hybrid_lstm.pth" ]; then
+            last_train=$(stat -c %Y "ADAUSD_MODELS/adausd_hybrid_lstm.pth")
             current_time=$(date +%s)
-            age=$((current_time - ${last_train:-0}))
+            age=$((current_time - last_train))
             days=$((age / 86400))
             
-            echo "📊 Modelo Delta tiene $days días"
+            echo "📊 Modelo tiene $days días"
             
-            if [ $days -gt 7 ]; then
-              echo "🔄 Reentrenamiento necesario (>7 días)"
+            if [ $days -ge 7 ]; then
+              echo "🔄 Reentrenamiento necesario (≥7 días)"
               echo "should_train=true" >> $GITHUB_OUTPUT
             else
               echo "✅ Modelo vigente ($days días)"
               echo "should_train=false" >> $GITHUB_OUTPUT
             fi
           else
-            echo "❌ No existe modelo Delta, entrenar"
+            echo "❌ No existe modelo híbrido"
             echo "should_train=true" >> $GITHUB_OUTPUT
           fi
       
@@ -73,25 +67,23 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: 🧠 Train LSTM Model (Delta + Volume)
-        if: steps.check.outputs.should_train == 'true' && github.event.inputs.use_legacy_model != 'true'
+      - name: 🧠 Train Hybrid LSTM Model
+        if: steps.check.outputs.should_train == 'true'
         env:
-          KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
-          KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo ""
           echo "🔥 ============================================"
-          echo "   ENTRENANDO MODELO CON DELTAS Y VOLUMEN"
+          echo "   ENTRENANDO MODELO LSTM HÍBRIDO"
           echo "============================================"
           echo ""
           echo "✨ Características:"
-          echo "   • Predicción de deltas (anclaje garantizado)"
-          echo "   • Análisis de volumen avanzado"
+          echo "   • LSTM Bidireccional con Atención"
+          echo "   • Derivadas de volumen (1ra y 2da)"
           echo "   • Indicadores OBV, VWAP, PVT"
-          echo "   • Detección de divergencias"
-          echo "   • Validación de breakouts"
+          echo "   • Divergencias precio-volumen"
+          echo "   • Pérdida personalizada con coherencia"
           echo ""
           
           python adausd_lstm_5min_delta.py
@@ -99,79 +91,64 @@ jobs:
           echo ""
           echo "✅ Entrenamiento completado"
       
-      - name: 🧠 Train Legacy Model (sin deltas)
-        if: steps.check.outputs.should_train == 'true' && github.event.inputs.use_legacy_model == 'true'
-        env:
-          KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
-          KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
-          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: |
-          echo "⚠️ Usando modelo legacy (sin deltas)"
-          python adausd_lstm_5min.py
-      
-      - name: 📊 Validate model
+      - name: 📊 Validate metrics
         if: steps.check.outputs.should_train == 'true'
         run: |
           echo ""
-          echo "🔍 Validando modelo generado..."
+          echo "🔍 Validando métricas del modelo..."
           
-          if [ -f "ADAUSD_MODELS/adausd_lstm_delta.pth" ]; then
-            echo "✅ Modelo Delta encontrado"
+          if [ -f "ADAUSD_MODELS/config_hybrid.json" ]; then
+            echo "✅ Configuración encontrada"
             
-            # Verificar tamaño
-            size=$(stat -f%z "ADAUSD_MODELS/adausd_lstm_delta.pth" 2>/dev/null || stat -c%s "ADAUSD_MODELS/adausd_lstm_delta.pth")
-            echo "   Tamaño: $(($size / 1024 / 1024)) MB"
-            
-            # Verificar config
-            if [ -f "ADAUSD_MODELS/config_delta.json" ]; then
-              echo "✅ Configuración encontrada"
-              
-              # Mostrar configuración
-              echo ""
-              echo "⚙️ Configuración del modelo:"
-              python3 << 'PYEOF'
-              import json
-              try:
-                  with open('ADAUSD_MODELS/config_delta.json', 'r') as f:
-                      config = json.load(f)
-                  
-                  print(f"   Use Volume: {config.get('use_volume', 'N/A')}")
-                  print(f"   Use Delta: {config.get('use_delta', 'N/A')}")
-                  print(f"   Volume Indicators: {config.get('volume_indicators', 'N/A')}")
-                  print(f"   Predict Volume: {config.get('predict_volume', 'N/A')}")
-                  print(f"   Input Size: {config.get('input_size', 'N/A')}")
-                  print(f"   Output Size: {config.get('output_size', 'N/A')}")
-                  
-                  if 'metrics_test' in config:
-                      print("\n📊 Métricas de Test:")
-                      for target, metrics in config['metrics_test'].items():
-                          print(f"\n   {target}:")
-                          print(f"      R²: {metrics.get('R2', 'N/A'):.4f}")
-                          print(f"      MAE: {metrics.get('MAE', 'N/A'):.6f}")
-              except Exception as e:
-                  print(f"   Error parseando config: {e}")
-              PYEOF
-                          else
-                            echo "⚠️ No se encontró config_delta.json"
-                          fi
-                          
-                        else
-                          echo "❌ Modelo Delta no generado"
-                          exit 1
-                        fi
+            echo ""
+            echo "📊 MÉTRICAS DEL MODELO:"
+            python3 << 'PYEOF'
+            import json
+            try:
+                with open('ADAUSD_MODELS/config_hybrid.json', 'r') as f:
+                    config = json.load(f)
+                
+                metrics = config.get('metrics_test', {})
+                
+                print("   Target          R²        MAE")
+                print("   ---------------------------------")
+                
+                for target, data in metrics.items():
+                    r2 = data.get('R2', 0)
+                    mae = data.get('MAE', 0)
+                    print(f"   {target:12} {r2:8.4f}   {mae:8.6f}")
+                
+                # Validación de calidad
+                avg_r2 = sum(m['R2'] for m in metrics.values()) / len(metrics)
+                print(f"\n   📈 R² promedio: {avg_r2:.4f}")
+                
+                if avg_r2 < 0.3:
+                    print("   ⚠️  R² bajo - considerar reentrenamiento")
+                elif avg_r2 < 0.5:
+                    print("   ✅ R² aceptable")
+                else:
+                    print("   🎉 R² excelente")
+                    
+            except Exception as e:
+                print(f"   Error: {e}")
+            PYEOF
+                    else
+                      echo "❌ No se encontró config_hybrid.json"
+                    fi
       
-      - name: 💾 Commit model
+      - name: 💾 Commit trained model
         if: steps.check.outputs.should_train == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           # Añadir archivos del modelo
-          git add ADAUSD_MODELS/*delta* 2>/dev/null || true
-          git add ADAUSD_MODELS/*.json 2>/dev/null || true
+          git add ADAUSD_MODELS/adausd_hybrid_lstm.pth 2>/dev/null || true
+          git add ADAUSD_MODELS/config_hybrid.json 2>/dev/null || true
+          git add ADAUSD_MODELS/scaler_input_hybrid.pkl 2>/dev/null || true
+          git add ADAUSD_MODELS/scaler_output_hybrid.pkl 2>/dev/null || true
+          git add adausd_hybrid_results.png 2>/dev/null || true
           git add ADAUSD_1h_data.csv 2>/dev/null || true
-          git add *delta_results.png 2>/dev/null || true
           
           if git diff --staged --quiet; then
             echo "ℹ️ No hay cambios para commitear"
@@ -180,7 +157,7 @@ jobs:
             git diff --staged --name-only
             
             TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
-            git commit -m "🤖 Model (Delta) trained: $TIMESTAMP"
+            git commit -m "🤖 Hybrid Model trained: $TIMESTAMP"
             
             # Push con retry
             MAX_RETRIES=3
@@ -208,23 +185,33 @@ jobs:
           echo ""
           echo "══════════════════════════════════════════════════════════════════════"
           if [ "${{ steps.check.outputs.should_train }}" = "true" ]; then
-            if [ "${{ github.event.inputs.use_legacy_model }}" = "true" ]; then
-              echo "  ✅ MODELO LEGACY ENTRENADO (sin deltas)"
-            else
-              echo "  ✅ MODELO DELTA+VOLUME ENTRENADO"
-            fi
-            
+            echo "  ✅ MODELO HÍBRIDO ENTRENADO"
             echo ""
             echo "📁 Archivos generados:"
-            [ -f "ADAUSD_MODELS/adausd_lstm_delta.pth" ] && echo "   ✅ adausd_lstm_delta.pth" || echo "   ❌ adausd_lstm_delta.pth"
-            [ -f "ADAUSD_MODELS/config_delta.json" ] && echo "   ✅ config_delta.json" || echo "   ❌ config_delta.json"
-            [ -f "ADAUSD_MODELS/scaler_input_delta.pkl" ] && echo "   ✅ scaler_input_delta.pkl" || echo "   ❌ scaler_input_delta.pkl"
-            [ -f "ADAUSD_MODELS/scaler_output_delta.pkl" ] && echo "   ✅ scaler_output_delta.pkl" || echo "   ❌ scaler_output_delta.pkl"
-            [ -f "adausd_delta_results.png" ] && echo "   ✅ adausd_delta_results.png" || echo "   ⚠️ adausd_delta_results.png"
+            [ -f "ADAUSD_MODELS/adausd_hybrid_lstm.pth" ] && echo "   ✅ adausd_hybrid_lstm.pth" || echo "   ❌ adausd_hybrid_lstm.pth"
+            [ -f "ADAUSD_MODELS/config_hybrid.json" ] && echo "   ✅ config_hybrid.json" || echo "   ❌ config_hybrid.json"
+            [ -f "adausd_hybrid_results.png" ] && echo "   ✅ adausd_hybrid_results.png" || echo "   ⚠️ adausd_hybrid_results.png"
             
-          else
-            echo "  ℹ️ ENTRENAMIENTO NO NECESARIO"
-            echo ""
-            echo "📊 Modelo vigente"
-          fi
-          echo "══════════════════════════════════════════════════════════════════════"
+            # Mostrar métricas si existen
+            if [ -f "ADAUSD_MODELS/config_hybrid.json" ]; then
+              echo ""
+              echo "📊 Resumen de métricas:"
+              python3 << 'PYEOF'
+              import json
+              try:
+                  with open('ADAUSD_MODELS/config_hybrid.json', 'r') as f:
+                      config = json.load(f)
+                  
+                  metrics = config.get('metrics_test', {})
+                  if metrics:
+                      print("   delta_high  R²:", f"{metrics.get('delta_high', {}).get('R2', 0):.4f}")
+                      print("   delta_low   R²:", f"{metrics.get('delta_low', {}).get('R2', 0):.4f}")
+                      print("   delta_close R²:", f"{metrics.get('delta_close', {}).get('R2', 0):.4f}")
+              except:
+                  pass
+              PYEOF
+                          fi
+                        else
+                          echo "  ℹ️ ENTRENAMIENTO NO NECESARIO"
+                        fi
+                        echo "══════════════════════════════════════════════════════════════════════"
