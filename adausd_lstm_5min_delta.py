@@ -570,26 +570,6 @@ def prepare_delta_dataset(df):
     
     return (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
            scaler_in, scaler_out, feature_cols, target_cols
-    
-    # 7. Crear secuencias
-    def create_sequences(X, y, seq_len):
-        X_seq, y_seq = [], []
-        for i in range(seq_len, len(X)):
-            X_seq.append(X[i-seq_len:i])
-            y_seq.append(y[i-1])  # Target es la vela después de la secuencia
-        return np.array(X_seq), np.array(y_seq)
-    
-    print("\n🔄 Creando secuencias...")
-    X_train_seq, y_train_seq = create_sequences(X_train, y_train, Config.SEQ_LEN)
-    X_val_seq, y_val_seq = create_sequences(X_val, y_val, Config.SEQ_LEN)
-    X_test_seq, y_test_seq = create_sequences(X_test, y_test, Config.SEQ_LEN)
-    
-    print(f"✅ Train: X{X_train_seq.shape}, y{y_train_seq.shape}")
-    print(f"✅ Val:   X{X_val_seq.shape}, y{y_val_seq.shape}")
-    print(f"✅ Test:  X{X_test_seq.shape}, y{y_test_seq.shape}")
-    
-    return (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
-           scaler_in, scaler_out, feature_cols, target_cols
 
 def clean_financial_data(df, max_abs_value=1e6, fill_method='ffill'):
     """
@@ -1086,11 +1066,12 @@ def main():
         # Aplicar limpieza desde el principio
         df = clean_financial_data(df, max_abs_value=1e6, fill_method='ffill')
         
-        # Luego preparar dataset
-        scaler_in, scaler_out, feature_cols, target_cols = prepare_delta_dataset(df)
+        # ==== CORRECCIÓN: Eliminar esta línea duplicada ====
+        # scaler_in, scaler_out, feature_cols, target_cols = prepare_delta_dataset(df)
+        # ^^^^ ESTA LÍNEA ESTÁ CAUSANDO EL ERROR ^^^^
         
-        # 2. Preparar dataset
-        (X_train, y_train), (X_val, y_val), (X_test, y_test), \
+        # 2. Preparar dataset - La función retorna 7 valores, no 4
+        (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
         scaler_in, scaler_out, feature_cols, target_cols = prepare_delta_dataset(df)
         
         input_size = len(feature_cols)
@@ -1102,9 +1083,9 @@ def main():
         print(f"   Total parámetros estimados: ~{(input_size * Config.HIDDEN_SIZE * 4 + Config.HIDDEN_SIZE * output_size) / 1e6:.2f}M")
         
         # 3. Crear dataloaders
-        train_dataset = ForexDataset(X_train, y_train)
-        val_dataset = ForexDataset(X_val, y_val)
-        test_dataset = ForexDataset(X_test, y_test)
+        train_dataset = ForexDataset(X_train_seq, y_train_seq)
+        val_dataset = ForexDataset(X_val_seq, y_val_seq)
+        test_dataset = ForexDataset(X_test_seq, y_test_seq)
         
         train_loader = torch.utils.data.DataLoader(
             train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True
