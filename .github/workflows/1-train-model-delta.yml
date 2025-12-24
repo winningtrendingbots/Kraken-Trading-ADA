@@ -131,35 +131,35 @@ jobs:
               echo ""
               echo "⚙️ Configuración del modelo:"
               python3 << 'PYEOF'
-import json
-try:
-    with open('ADAUSD_MODELS/config_delta.json', 'r') as f:
-        config = json.load(f)
-    
-    print(f"   Use Volume: {config.get('use_volume', 'N/A')}")
-    print(f"   Use Delta: {config.get('use_delta', 'N/A')}")
-    print(f"   Volume Indicators: {config.get('volume_indicators', 'N/A')}")
-    print(f"   Predict Volume: {config.get('predict_volume', 'N/A')}")
-    print(f"   Input Size: {config.get('input_size', 'N/A')}")
-    print(f"   Output Size: {config.get('output_size', 'N/A')}")
-    
-    if 'metrics_test' in config:
-        print("\n📊 Métricas de Test:")
-        for target, metrics in config['metrics_test'].items():
-            print(f"\n   {target}:")
-            print(f"      R²: {metrics.get('R2', 'N/A'):.4f}")
-            print(f"      MAE: {metrics.get('MAE', 'N/A'):.6f}")
-except Exception as e:
-    print(f"   Error parseando config: {e}")
-PYEOF
-            else
-              echo "⚠️ No se encontró config_delta.json"
-            fi
-            
-          else
-            echo "❌ Modelo Delta no generado"
-            exit 1
-          fi
+              import json
+              try:
+                  with open('ADAUSD_MODELS/config_delta.json', 'r') as f:
+                      config = json.load(f)
+                  
+                  print(f"   Use Volume: {config.get('use_volume', 'N/A')}")
+                  print(f"   Use Delta: {config.get('use_delta', 'N/A')}")
+                  print(f"   Volume Indicators: {config.get('volume_indicators', 'N/A')}")
+                  print(f"   Predict Volume: {config.get('predict_volume', 'N/A')}")
+                  print(f"   Input Size: {config.get('input_size', 'N/A')}")
+                  print(f"   Output Size: {config.get('output_size', 'N/A')}")
+                  
+                  if 'metrics_test' in config:
+                      print("\n📊 Métricas de Test:")
+                      for target, metrics in config['metrics_test'].items():
+                          print(f"\n   {target}:")
+                          print(f"      R²: {metrics.get('R2', 'N/A'):.4f}")
+                          print(f"      MAE: {metrics.get('MAE', 'N/A'):.6f}")
+              except Exception as e:
+                  print(f"   Error parseando config: {e}")
+              PYEOF
+                          else
+                            echo "⚠️ No se encontró config_delta.json"
+                          fi
+                          
+                        else
+                          echo "❌ Modelo Delta no generado"
+                          exit 1
+                        fi
       
       - name: 💾 Commit model
         if: steps.check.outputs.should_train == 'true'
