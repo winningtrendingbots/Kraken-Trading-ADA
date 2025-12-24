@@ -2,7 +2,7 @@ name: Predict & Trade (Mejorado)
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Cada 5 minutos
+    - cron: '*/5 * * * *'  # Cada 5 minutos y si n va bien cada 15
   workflow_dispatch:
 
 permissions:
@@ -14,6 +14,11 @@ jobs:
     timeout-minutes: 10
     
     steps:
+      - name: Log execution
+        run: |
+          echo "🕐 Workflow ejecutado a: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "📋 Trigger: ${{ github.event_name }}"
+          echo "🌿 Branch: ${{ github.ref }}"
       - name: Checkout
         uses: actions/checkout@v4
       
