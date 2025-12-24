@@ -1,10 +1,10 @@
 {
-  "current_capital": 41.3778,
+  "current_capital": 41.0553,
   "total_profit": 0,
   "total_trades": 0,
   "win_count": 0,
   "margin_used": 28.866058614195044,
-  "last_update": "2025-12-24T07:17:19.841236",
+  "last_update": "2025-12-24T07:43:12.482311",
   "leverage_config": 5,
-  "buying_power": 206.889
+  "buying_power": 205.2765
 }
