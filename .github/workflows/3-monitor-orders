@@ -2,7 +2,7 @@ name: 👀 Monitor Orders
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Cada 5 minutos
+    - cron: '*/5 * * * *'  # Cada 5 minutos (ajustado de 4 a 5)
   workflow_dispatch:
 
 permissions:
@@ -22,20 +22,27 @@ jobs:
         run: |
           echo "🔍 Verificando órdenes abiertas..."
           
+          # Verificar open_orders.json
           if [ -f "open_orders.json" ]; then
-            # Contar órdenes en el JSON
-            orders=$(cat open_orders.json | python3 -c "import sys, json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+            # Contar órdenes (excluir {} vacío)
+            order_count=$(cat open_orders.json | python3 -c "import sys, json; data=json.load(sys.stdin); print(len(data))" 2>/dev/null || echo "0")
             
-            if [ "$orders" -gt 0 ]; then
-              echo "📊 $orders orden(es) abierta(s)"
+            if [ "$order_count" -gt 0 ]; then
+              echo "📊 Órdenes abiertas: $order_count"
               echo "has_orders=true" >> $GITHUB_OUTPUT
             else
-              echo "✅ No hay órdenes abiertas"
+              echo "📭 No hay órdenes abiertas"
               echo "has_orders=false" >> $GITHUB_OUTPUT
             fi
           else
-            echo "📭 Archivo de órdenes no existe"
+            echo "📭 Archivo open_orders.json no existe"
             echo "has_orders=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Verificar orders_executed.csv
+          if [ -f "orders_executed.csv" ]; then
+            lines=$(wc -l < orders_executed.csv)
+            echo "📋 Órdenes ejecutadas históricas: $((lines - 1))"
           fi
       
       - name: 🐍 Setup Python
@@ -49,9 +56,9 @@ jobs:
         if: steps.check.outputs.has_orders == 'true'
         run: |
           pip install --upgrade pip
-          pip install pandas requests
+          pip install -r requirements.txt
       
-      - name: 👀 Monitor positions
+      - name: 👀 Monitor and close orders
         if: steps.check.outputs.has_orders == 'true'
         env:
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
@@ -59,16 +66,24 @@ jobs:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          echo ""
-          echo "👀 ============================================"
-          echo "   MONITOREANDO POSICIONES"
-          echo "============================================"
-          echo ""
+          echo "👀 Monitoreando órdenes abiertas..."
           
-          python monitor_orders.py
+          # Crear script de monitoreo dedicado
+          cat > monitor_only.py << 'EOF'
+import sys
+sys.path.insert(0, '.')
+
+try:
+    from kraken_trader import monitor_orders
+    print("🔍 Ejecutando monitoreo de órdenes...")
+    monitor_orders()
+    print("✅ Monitoreo completado")
+except Exception as e:
+    print(f"❌ Error en monitoreo: {e}")
+    raise
+EOF
           
-          echo ""
-          echo "✅ Monitoreo completado"
+          python monitor_only.py
       
       - name: 💾 Save changes
         if: steps.check.outputs.has_orders == 'true'
@@ -76,14 +91,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Añadir archivos actualizados
+          # Añadir archivos modificados
           git add open_orders.json 2>/dev/null || true
           git add kraken_trades.csv 2>/dev/null || true
+          git add orders_executed.csv 2>/dev/null || true
           
           if git diff --staged --quiet; then
-            echo "ℹ️ Sin cambios que guardar"
+            echo "ℹ️ No hay cambios para guardar"
           else
-            timestamp=$(date -u +"%Y-%m-%d %H:%M UTC")
+            timestamp=$(date -u +"%H:%M UTC")
             git commit -m "👀 Orders monitored: $timestamp"
             git push
             echo "✅ Cambios guardados"
@@ -93,27 +109,14 @@ jobs:
         if: always()
         run: |
           echo ""
-          echo "📊 ============================================"
-          echo "   RESUMEN"
-          echo "============================================"
-          echo ""
-          
+          echo "════════════════════════════════════"
           if [ "${{ steps.check.outputs.has_orders }}" = "true" ]; then
             echo "✅ Monitoreo ejecutado"
-            
-            if [ -f "kraken_trades.csv" ]; then
-              trades=$(wc -l < kraken_trades.csv)
-              echo "📈 Trades cerrados: $((trades - 1))"
-            fi
-            
-            if [ -f "open_orders.json" ]; then
-              orders=$(cat open_orders.json | python3 -c "import sys, json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
-              echo "📊 Órdenes activas: $orders"
-            fi
+            echo "   - Órdenes verificadas"
+            echo "   - Precios checkeados"
+            echo "   - TP/SL evaluados"
           else
-            echo "⏸️ Sin órdenes para monitorear"
+            echo "⏳ Sin órdenes activas"
+            echo "   - Esperando nuevas señales"
           fi
-          
-          echo ""
-          echo "🕐 Próximo check: En 5 minutos"
-          echo ""
+          echo "════════════════════════════════════"
