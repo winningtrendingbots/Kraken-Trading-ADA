@@ -1,264 +1,233 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
+import yfinance as yf
 import requests
-import json
 import os
-import joblib
 import time
+import json
+import joblib
 from datetime import datetime
-from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-import tensorflow as keras
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.optimizers import Adam
 
 # --- CONFIGURACIÓN ---
-SEQ_LEN = 72       # 6 horas de contexto (5min * 72)
-PRED_HORIZON = 1   # Predecir la siguiente vela
-MODEL_DIR = "ADAUSD_MODELS"
+SEQ_LEN = 60            # Usar 60 velas de historia (contexto)
+PREDICT_AHEAD = 1       # Predecir la siguiente vela
+MODEL_FILE = "ADAUSD_MODELS/ada_lstm_robust.keras" # Usamos formato .keras moderno
 DATA_FILE = "ADAUSD_1h_data.csv"
-SCALER_FILE = os.path.join(MODEL_DIR, "scaler.pkl")
-MODEL_FILE = os.path.join(MODEL_DIR, "ada_lstm_model.h5")
+os.makedirs("ADAUSD_MODELS", exist_ok=True)
 
-# Configuración Telegram (Reemplaza con tus datos o usa secrets)
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+# Credenciales (desde GitHub Secrets)
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TELEGRAM_API")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("CHAT_ID")
 
-os.makedirs(MODEL_DIR, exist_ok=True)
-
-# --- 1. OBTENCIÓN DE DATOS (Kraken) ---
-def fetch_kraken_data(pair="ADAUSD", interval=5):
-    url = f"https://api.kraken.com/0/public/OHLC?pair={pair}&interval={interval}"
+# --- 1. OBTENCIÓN DE DATOS ROBUSTA ---
+def get_data():
+    """Descarga datos históricos fiables usando Yahoo Finance (más estable para history)"""
+    print("📥 Descargando datos históricos de ADA-USD...")
     try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("error"):
-            print("Error Kraken:", data["error"])
-            return None
+        # Descargar 60 días de datos en intervalo de 1h o 5m según prefieras
+        # Para trading intradía robusto, entrenamos con 1h y ajustamos predicción
+        df = yf.download("ADA-USD", period="60d", interval="1h", progress=False)
         
-        # Parsear
-        ohlc = data["result"][list(data["result"].keys())[0]]
-        df = pd.DataFrame(ohlc, columns=["time", "open", "high", "low", "close", "vwap", "vol", "count"])
-        df["time"] = pd.to_datetime(df["time"], unit='s')
-        df = df[["time", "open", "high", "low", "close", "vol"]].astype({
-            "open": float, "high": float, "low": float, "close": float, "vol": float
-        })
-        # Ordenar por tiempo
-        df = df.sort_values("time").reset_index(drop=True)
+        if len(df) < 100:
+            raise ValueError("Datos insuficientes de Yahoo Finance")
+            
+        df = df.reset_index()
+        df.columns = [c.lower() for c in df.columns] # open, high, low, close...
+        
+        # Limpieza básica
+        df = df[['close', 'high', 'low', 'open', 'volume']]
+        
+        # Guardar para referencia
+        df.to_csv(DATA_FILE)
         return df
     except Exception as e:
-        print(f"Error descargando datos: {e}")
+        print(f"❌ Error descargando datos: {e}")
         return None
 
-# --- 2. PREPARACIÓN DE DATOS (CON DELTAS) ---
-def prepare_data(df):
+def get_current_price_kraken():
+    """Obtiene el precio actual REAL de Kraken para la inferencia"""
+    try:
+        url = "https://api.kraken.com/0/public/Ticker?pair=ADAUSD"
+        resp = requests.get(url, timeout=5).json()
+        price = float(resp['result'][list(resp['result'].keys())[0]]['c'][0])
+        return price
+    except:
+        return None
+
+# --- 2. NORMALIZACIÓN POR VENTANA (LA CLAVE DEL ÉXITO) ---
+def window_normalization(window_data):
     """
-    Normaliza inputs y genera targets basados en cambio porcentual 
-    para anclar la predicción al precio actual.
+    Normaliza una ventana dividiendo todo por el primer valor de la ventana.
+    Esto enseña al modelo el CAMBIO PORCENTUAL, no el precio absoluto.
+    Retorna: (ventana_normalizada, factor_de_escala)
     """
-    df = df.copy()
-    
-    # Inputs: Usamos precios normalizados para que el LSTM vea la "forma" del gráfico
-    # Nota: Podríamos usar log-returns para inputs también, pero MinMax funciona bien si se reentrena diario.
-    feature_cols = ["open", "high", "low", "close", "vol"]
-    
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(df[feature_cols])
-    
-    # Guardar scaler para inferencia futura
-    joblib.dump(scaler, SCALER_FILE)
-    
+    base_price = window_data[0]
+    return (window_data / base_price) - 1, base_price
+
+def denormalize(val, base_price):
+    """Convierte la predicción del modelo de vuelta a precio real"""
+    return base_price * (val + 1)
+
+def prepare_dataset(df):
+    data = df['close'].values
     X, y = [], []
     
-    # Generar secuencias
-    # Target: Cambio porcentual respecto al Close de la última vela de la secuencia (t)
-    # y_high = (High(t+1) - Close(t)) / Close(t)
-    # y_low  = (Low(t+1) - Close(t)) / Close(t)
-    # y_close= (Close(t+1) - Close(t)) / Close(t)
-    
-    data_values = df[feature_cols].values
-    
-    for i in range(SEQ_LEN, len(df) - PRED_HORIZON):
-        # Input: ventana de SEQ_LEN
-        X.append(scaled_data[i-SEQ_LEN : i])
+    for i in range(len(data) - SEQ_LEN - PREDICT_AHEAD):
+        window = data[i : i + SEQ_LEN]
+        target = data[i + SEQ_LEN] # El precio que queremos predecir
         
-        current_close = data_values[i-1, 3] # Close de la última vela de entrada
+        # Normalizar ventana
+        norm_window, base = window_normalization(window)
         
-        next_high = data_values[i, 1]
-        next_low = data_values[i, 2]
-        next_close = data_values[i, 3]
+        # Normalizar target respecto al MISMO base de la ventana
+        norm_target = (target / base) - 1
         
-        # Calcular Deltas (Porcentaje de cambio)
-        delta_high = (next_high - current_close) / current_close
-        delta_low = (next_low - current_close) / current_close
-        delta_close = (next_close - current_close) / current_close
+        X.append(norm_window)
+        y.append(norm_target)
         
-        y.append([delta_high, delta_low, delta_close])
-        
-    return np.array(X), np.array(y), scaler
+    return np.array(X), np.array(y)
 
-# --- 3. ENTRENAMIENTO ---
-class ConstrainedMSELoss(keras.losses.Loss):
-    def call(self, y_true, y_pred):
-        # y_pred = [delta_high, delta_low, delta_close]
-        high_pred = y_pred[:, 0]
-        low_pred = y_pred[:, 1]
-        
-        # MSE estándar
-        mse = keras.losses.mean_squared_error(y_true, y_pred)
-        
-        # Penalización si High < Low (lógica sigue aplicando a los deltas)
-        # Si delta_high < delta_low, añadimos penalización
-        penalty = keras.backend.mean(keras.backend.maximum(0.0, low_pred - high_pred))
-        
-        return mse + penalty
-
+# --- 3. CONSTRUCCIÓN DEL MODELO ---
 def build_model(input_shape):
     model = Sequential([
-        LSTM(64, return_sequences=True, input_shape=input_shape),
+        # Bidirectional LSTM captura patrones en ambas direcciones
+        Bidirectional(LSTM(50, return_sequences=True), input_shape=input_shape),
         Dropout(0.2),
-        LSTM(32, return_sequences=False),
+        LSTM(50, return_sequences=False),
         Dropout(0.2),
-        Dense(16, activation="relu"),
-        Dense(3)  # [delta_high, delta_low, delta_close]
+        Dense(25, activation='relu'),
+        Dense(1) # Predice el cambio porcentual (normalizado)
     ])
-    model.compile(optimizer="adam", loss=ConstrainedMSELoss())
+    model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
     return model
 
+# --- 4. FUNCIONES PRINCIPALES ---
+
 def train_job():
-    print("Iniciando entrenamiento...")
-    df = fetch_kraken_data()
-    if df is None or len(df) < SEQ_LEN + 10:
-        print("Datos insuficientes.")
-        return False
+    df = get_data()
+    if df is None: return
     
-    # Guardar CSV crudo para debug/historial
-    df.to_csv(DATA_FILE, index=False)
+    X, y = prepare_dataset(df)
     
-    X, y, scaler = prepare_data(df)
+    # Reshape para LSTM [samples, time steps, features]
+    # Aquí usamos solo 'Close' como feature para máxima estabilidad
+    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
     
-    # Split
-    split = int(0.9 * len(X))
-    X_train, X_test = X[:split], X[split:]
-    y_train, y_test = y[:split], y[split:]
+    print(f"🧠 Entrenando con {len(X)} secuencias...")
     
-    model = build_model((X_train.shape[1], X_train.shape[2]))
+    model = build_model((X.shape[1], 1))
     
-    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    early_stop = EarlyStopping(monitor='loss', patience=5, restore_best_weights=True)
     
     history = model.fit(
-        X_train, y_train,
-        validation_data=(X_test, y_test),
-        epochs=30,
+        X, y,
+        epochs=50,
         batch_size=32,
         callbacks=[early_stop],
         verbose=1
     )
     
     model.save(MODEL_FILE)
-    print(f"Modelo guardado en {MODEL_FILE}")
+    print("✅ Modelo guardado exitosamente.")
     
-    # Generar gráfica simple de loss
-    import matplotlib.pyplot as plt
-    plt.figure(figsize=(10,5))
-    plt.plot(history.history['loss'], label='Train Loss')
-    plt.plot(history.history['val_loss'], label='Val Loss')
-    plt.title('Training Loss (Delta Prediction)')
-    plt.legend()
-    plt.savefig('training_loss.png')
-    
-    return True
-
-# --- 4. PREDICCIÓN E INFERENCIA ---
-def send_telegram_msg(message):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram creds no configuradas.")
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
+    # Generar gráfica de loss
     try:
-        requests.post(url, json=payload, timeout=5)
-    except Exception as e:
-        print(f"Error enviando Telegram: {e}")
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(10,6))
+        plt.plot(history.history['loss'], label='Loss')
+        plt.title('Error del Modelo (Training Loss)')
+        plt.savefig('training_loss.png')
+    except:
+        pass
 
-def predict_next_candle():
-    if not os.path.exists(MODEL_FILE) or not os.path.exists(SCALER_FILE):
-        print("Modelo o Scaler no encontrados. Entrena primero.")
+def predict_job():
+    if not os.path.exists(MODEL_FILE):
+        print("❌ No hay modelo entrenado.")
         return
 
-    # Cargar modelo y scaler
-    custom_objects = {"ConstrainedMSELoss": ConstrainedMSELoss}
-    model = load_model(MODEL_FILE, custom_objects=custom_objects)
-    scaler = joblib.load(SCALER_FILE)
+    # 1. Cargar datos recientes y modelo
+    df = get_data()
+    model = load_model(MODEL_FILE)
     
-    # Obtener datos recientes
-    df = fetch_kraken_data()
-    if df is None: return
-
-    # Preparar última secuencia
-    last_sequence = df.iloc[-SEQ_LEN:][["open", "high", "low", "close", "vol"]]
-    last_close_price = last_sequence.iloc[-1]["close"] # EL ANCLA
+    # 2. Preparar la ÚLTIMA secuencia disponible
+    last_window_closes = df['close'].values[-SEQ_LEN:]
     
-    # Escalar
-    input_seq = scaler.transform(last_sequence)
-    input_seq = input_seq.reshape(1, SEQ_LEN, 5)
+    # 3. Normalizar igual que en el entrenamiento
+    norm_window, base_price_window = window_normalization(last_window_closes)
+    input_seq = np.reshape(norm_window, (1, SEQ_LEN, 1))
     
-    # Predecir (Output son Deltas)
-    pred_deltas = model.predict(input_seq)[0] # [d_high, d_low, d_close]
+    # 4. Predecir
+    pred_normalized = model.predict(input_seq)[0][0]
     
-    # Reconstruir precios absolutos
-    pred_high = last_close_price * (1 + pred_deltas[0])
-    pred_low  = last_close_price * (1 + pred_deltas[1])
-    pred_close= last_close_price * (1 + pred_deltas[2])
+    # 5. Desnormalizar usando el precio base de la ventana
+    predicted_price = denormalize(pred_normalized, base_price_window)
     
-    # Lógica de Trading Básica
-    signal = "HOLD"
-    # Si predice subida significativa (> 0.2%) y el low no rompe mucho
-    if pred_close > last_close_price * 1.002: 
-        signal = "BUY"
-    # Si predice bajada
-    elif pred_close < last_close_price * 0.998:
-        signal = "SELL"
+    # 6. Obtener precio actual real de Kraken para comparar
+    current_market_price = get_current_price_kraken()
+    if current_market_price is None:
+        current_market_price = last_window_closes[-1]
         
-    # Guardar señal para el bot de trading (kraken_trader.py)
-    # Mantenemos compatibilidad con tu estructura JSON
-    signal_data = {
+    # --- CÁLCULO DE BANDAS DE PRECIO (High/Low simulados por volatilidad) ---
+    # Como el modelo predice Close, estimamos High/Low usando volatilidad reciente
+    recent_volatility = df['high'].iloc[-10:] - df['low'].iloc[-10:]
+    avg_vol = recent_volatility.mean()
+    
+    pred_high = predicted_price + (avg_vol * 0.5)
+    pred_low = predicted_price - (avg_vol * 0.5)
+
+    # --- LÓGICA DE SEÑAL ---
+    # Si la predicción es > 0.3% del precio actual
+    threshold = 0.003
+    change_pct = (predicted_price - current_market_price) / current_market_price
+    
+    signal = "HOLD"
+    if change_pct > threshold:
+        signal = "BUY"
+    elif change_pct < -threshold:
+        signal = "SELL"
+
+    # --- RESULTADOS ---
+    print(f"\n💡 Precio Actual: {current_market_price:.4f}")
+    print(f"🔮 Predicción:   {predicted_price:.4f} ({change_pct*100:.2f}%)")
+    
+    output = {
         "timestamp": datetime.utcnow().isoformat(),
-        "base_price": round(last_close_price, 4),
+        "base_price": current_market_price,
+        "predicted_close": round(predicted_price, 4),
         "predicted_high": round(pred_high, 4),
         "predicted_low": round(pred_low, 4),
-        "predicted_close": round(pred_close, 4),
-        "signal": signal,
-        # Stop loss sugerido: un poco por debajo del Low predicho si es BUY
-        "stop_loss": round(pred_low * 0.995, 4) if signal == "BUY" else round(pred_high * 1.005, 4),
-        "take_profit": round(pred_high, 4) if signal == "BUY" else round(pred_low, 4)
+        "signal": signal
     }
     
     with open("latest_pred.json", "w") as f:
-        json.dump(signal_data, f, indent=4)
-        
-    # --- MENSAJE TELEGRAM (Formato Original) ---
-    emoji = "🟢" if signal == "BUY" else "🔴" if signal == "SELL" else "⚪"
+        json.dump(output, f, indent=2)
+
+    send_telegram_report(signal, current_market_price, predicted_price, pred_high, pred_low)
+
+def send_telegram_report(signal, current, pred, high, low):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
+    
+    emoji = "🚀" if signal == "BUY" else "🔻" if signal == "SELL" else "⚖️"
     msg = f"""
-*ADA/USD AI Prediction (5m)* {emoji}
+*ADA/USD AI Forecast* {emoji}
 
 *Signal:* `{signal}`
-*Base Price:* `${last_close_price:.4f}`
+*Current:* `${current:.4f}`
+*Target:* `${pred:.4f}`
 
-*Predictions (Next Candle):*
-High:  `${pred_high:.4f}`
-Low:   `${pred_low:.4f}`
-Close: `${pred_close:.4f}`
-
-_Confidence is based on constrained LSTM model._
+_Range:_
+H: `${high:.4f}` | L: `${low:.4f}`
 """
-    send_telegram_msg(msg)
-    print("Predicción completada y notificada.")
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
 
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "--predict":
-        predict_next_candle()
+        predict_job()
     else:
         train_job()
