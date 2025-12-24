@@ -48,28 +48,28 @@ jobs:
               echo ""
               echo "📊 Información del modelo:"
               python3 << 'PYEOF'
-import json
-try:
-    with open('ADAUSD_MODELS/config_delta.json', 'r') as f:
-        config = json.load(f)
-    
-    print(f"   Features: {config.get('input_size', 'N/A')}")
-    print(f"   Outputs: {config.get('output_size', 'N/A')}")
-    print(f"   Use Delta: {config.get('use_delta', False)}")
-    print(f"   Use Volume: {config.get('use_volume', False)}")
-    print(f"   Volume Indicators: {config.get('volume_indicators', False)}")
-    
-    if 'metrics_test' in config and 'delta_close' in config['metrics_test']:
-        r2 = config['metrics_test']['delta_close'].get('R2', 0)
-        print(f"   R² (delta_close): {r2:.4f}")
-except Exception as e:
-    print(f"   (Error parseando: {e})")
-PYEOF
-            fi
-          else
-            echo "❌ No hay modelo Delta entrenado"
-            echo "has_model=false" >> $GITHUB_OUTPUT
-          fi
+              import json
+              try:
+                  with open('ADAUSD_MODELS/config_delta.json', 'r') as f:
+                      config = json.load(f)
+                  
+                  print(f"   Features: {config.get('input_size', 'N/A')}")
+                  print(f"   Outputs: {config.get('output_size', 'N/A')}")
+                  print(f"   Use Delta: {config.get('use_delta', False)}")
+                  print(f"   Use Volume: {config.get('use_volume', False)}")
+                  print(f"   Volume Indicators: {config.get('volume_indicators', False)}")
+                  
+                  if 'metrics_test' in config and 'delta_close' in config['metrics_test']:
+                      r2 = config['metrics_test']['delta_close'].get('R2', 0)
+                      print(f"   R² (delta_close): {r2:.4f}")
+              except Exception as e:
+                  print(f"   (Error parseando: {e})")
+              PYEOF
+                          fi
+                        else
+                          echo "❌ No hay modelo Delta entrenado"
+                          echo "has_model=false" >> $GITHUB_OUTPUT
+                        fi
       
       - name: ⏳ Wait for model
         if: steps.check.outputs.has_model == 'false'
