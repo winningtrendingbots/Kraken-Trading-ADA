@@ -1,15 +1,1 @@
-{
-  "O54XFL-42T7F-63OYEJ": {
-    "order_id": "O54XFL-42T7F-63OYEJ",
-    "side": "buy",
-    "volume": 137.0,
-    "leverage": 5,
-    "entry_price": 0.3554,
-    "entry_time": "2025-12-24T06:05:32.002577",
-    "stop_loss": 0.348292,
-    "take_profit": 0.3921999931335449,
-    "margin_used": 9.708276999999983,
-    "liquidation_price": 0.0355,
-    "has_auto_sl": true
-  }
-}
+{}
