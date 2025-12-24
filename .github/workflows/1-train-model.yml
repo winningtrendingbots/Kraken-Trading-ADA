@@ -1,9 +1,8 @@
-name: 🤖  Train AI Model (5m)
+name: 🤖  Train Robust AI Model
 
 on:
   schedule:
-    # Ejecutar cada 6 horas
-    - cron: '0 */6 * * *'
+    - cron: '0 */12 * * *' # Entrenar cada 12 horas es suficiente para LSTM
   workflow_dispatch:
 
 permissions:
@@ -16,42 +15,38 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Importante para poder hacer merge/rebase
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |
-          pip install pandas numpy requests tensorflow scikit-learn matplotlib joblib
+          pip install pandas numpy yfinance tensorflow scikit-learn requests joblib
 
-      - name: Check if market is active (Simple check)
-        id: check
-        run: echo "should_train=true" >> $GITHUB_OUTPUT
-
-      - name: Train Model
-        if: steps.check.outputs.should_train == 'true'
+      - name: Run Training
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_API }}
+          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python adausd_lstm_5min.py
 
-      - name: Commit model and results
-        if: steps.check.outputs.should_train == 'true'
+      - name: Commit and Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # --- CORRECCIÓN DE ERROR DE PUSH ---
-          # 1. Asegurar que tenemos la última versión remota
-          git pull origin main --rebase
+          # 1. Asegurar sincronización
+          git pull origin main --rebase || echo "Nada que pullear"
+
+          # 2. Agregar archivos clave
+          git add ADAUSD_MODELS/ ADAUSD_1h_data.csv training_loss.png
           
-          # 2. Añadir archivos
-          git add ADAUSD_MODELS/ ADAUSD_1h_data.csv training_loss.png latest_pred.json 2>/dev/null || true
-          
-          # 3. Commit y Push
+          # 3. Commit seguro
           if git diff --staged --quiet; then
-            echo "No changes to commit"
+            echo "No hay cambios en el modelo."
           else
-            git commit -m "Auto-train model $(date -u +%Y-%m-%d)"
+            git commit -m "🧠 Model Retrained $(date -u +%Y-%m-%d)"
             git push origin main
           fi
