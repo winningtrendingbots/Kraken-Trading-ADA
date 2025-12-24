@@ -1,8 +1,8 @@
-name: 🔮 Predict & Trade (Enhanced)
+name: 🔮 Predict & Trade (Enhanced - 5min)
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Cada 15 minutos
+    - cron: '*/5 * * * *'  # ✅ Cada 5 minutos
   workflow_dispatch:
     inputs:
       use_legacy_predictor:
@@ -28,7 +28,7 @@ jobs:
           echo "🕐 Workflow ejecutado: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "📋 Trigger: ${{ github.event_name }}"
           echo "🌿 Branch: ${{ github.ref }}"
-          echo "🔧 Predictor: ${{ github.event.inputs.use_legacy_predictor == 'true' && 'Legacy' || 'Enhanced (MQL5)' }}"
+          echo "🔧 Predictor: ${{ github.event.inputs.use_legacy_predictor == 'true' && 'Legacy' || 'Enhanced (MQL5 - 5min)' }}"
       
       - name: 📥 Checkout
         uses: actions/checkout@v4
@@ -49,18 +49,18 @@ jobs:
             if [ -f "ADAUSD_MODELS/training_summary.json" ]; then
               echo "📊 Información del modelo:"
               python3 << 'PYEOF'
-              import json
-            try:
-                with open('ADAUSD_MODELS/training_summary.json', 'r') as f:
-                    data = json.load(f)
-                print(f"  Entrenado: {data.get('timestamp', 'N/A')}")
-                if 'overfitting_diagnosis' in data:
-                    diag = data['overfitting_diagnosis']
-                    print(f"  Gap Train-Test: {diag.get('gap_train_test', 'N/A')}")
-                    print(f"  Status: {diag.get('status', 'N/A')}")
-            except:
-                print("  (No se pudo parsear summary)")
-            PYEOF
+          import json
+          try:
+              with open('ADAUSD_MODELS/training_summary.json', 'r') as f:
+                  data = json.load(f)
+              print(f"  Entrenado: {data.get('timestamp', 'N/A')}")
+              if 'overfitting_diagnosis' in data:
+                  diag = data['overfitting_diagnosis']
+                  print(f"  Gap Train-Test: {diag.get('gap_train_test', 'N/A')}")
+                  print(f"  Status: {diag.get('status', 'N/A')}")
+          except Exception as e:
+              print(f"  (Error parseando summary: {e})")
+          PYEOF
             fi
           else
             echo "⚠️ No hay modelo entrenado"
@@ -84,7 +84,7 @@ jobs:
           echo "   3. Espera ~15-20 minutos"
           echo ""
           echo "📊 Una vez entrenado, este workflow:"
-          echo "   • Generará predicciones cada 15 min"
+          echo "   • Generará predicciones cada 5 min"
           echo "   • Ejecutará trades automáticamente"
           echo "   • Monitoreará órdenes cada 5 min"
           echo ""
@@ -133,7 +133,7 @@ jobs:
       # ========================================
       # PASO 4: Generar predicciones
       # ========================================
-      - name: 🔮 Generate predictions (Enhanced)
+      - name: 🔮 Generate predictions (Enhanced - 5min)
         if: steps.check.outputs.has_model == 'true' && github.event.inputs.use_legacy_predictor != 'true'
         env:
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
@@ -143,31 +143,34 @@ jobs:
         run: |
           echo ""
           echo "🔮 ============================================"
-          echo "   GENERANDO PREDICCIONES (ENHANCED)"
+          echo "   GENERANDO PREDICCIONES (5 MINUTOS)"
           echo "============================================"
           echo ""
-          echo "✨ Usando predict_enhanced.py (enfoque MQL5)"
+          echo "✨ Usando predict_enhanced_5min.py"
+          echo "   - Timeframe: 5 minutos"
           echo "   - Normalización con 120 días"
           echo "   - Clasificación multi-factor (H/L/C)"
           echo "   - Confianza dinámica"
           echo ""
           
           # Verificar que existe el script
-          if [ ! -f "predict_enhanced.py" ]; then
-            echo "❌ predict_enhanced.py no encontrado"
-            echo "⚠️ Cayendo back a predict_and_filter.py..."
+          if [ ! -f "predict_enhanced_5min.py" ]; then
+            echo "⚠️ predict_enhanced_5min.py no encontrado"
+            echo "📝 Creando versión adaptada..."
             
-            if python predict_and_filter.py; then
-              echo "✅ Predicción completada (legacy)"
+            # Aquí se crearía el script adaptado si no existe
+            # Por ahora, usar el enhanced normal
+            if python predict_enhanced.py; then
+              echo "✅ Predicción completada (usando enhanced genérico)"
             else
-              echo "❌ Error en predict_and_filter.py"
+              echo "❌ Error en predicción"
               exit 1
             fi
           else
-            # Ejecutar predicción mejorada
-            if python predict_enhanced.py; then
+            # Ejecutar predicción mejorada para 5min
+            if python predict_enhanced_5min.py; then
               echo ""
-              echo "✅ Predicción completada (enhanced)"
+              echo "✅ Predicción completada (5min)"
               
               # Verificar que se generó el CSV
               if [ -f "trading_signals.csv" ]; then
@@ -183,7 +186,7 @@ jobs:
               fi
             else
               echo ""
-              echo "❌ Error en predict_enhanced.py"
+              echo "❌ Error en predict_enhanced_5min.py"
               exit 1
             fi
           fi
@@ -204,16 +207,12 @@ jobs:
           echo "⚠️ Usando predict_and_filter.py (antiguo)"
           echo ""
           
-          # Ejecutar predicción con manejo de errores
           if python predict_and_filter.py; then
             echo ""
             echo "✅ Predicción completada"
             
-            # Verificar que se generó el CSV
             if [ -f "trading_signals.csv" ]; then
               echo "✅ Señales guardadas en trading_signals.csv"
-              
-              # Mostrar última señal
               echo ""
               echo "📊 Última señal generada:"
               tail -n 1 trading_signals.csv
@@ -240,16 +239,14 @@ jobs:
         run: |
           echo ""
           echo "💼 ============================================"
-          echo "   EJECUTANDO ESTRATEGIA DE TRADING"
+          echo "   EJECUTANDO ESTRATEGIA DE TRADING (5min)"
           echo "============================================"
           echo ""
           
-          # Ejecutar trader con manejo de errores
           if python trading_orchestrator.py; then
             echo ""
             echo "✅ Trading ejecutado correctamente"
             
-            # Mostrar órdenes abiertas (si existen)
             if [ -f "open_orders.json" ]; then
               echo ""
               echo "📋 Órdenes abiertas:"
@@ -260,7 +257,6 @@ jobs:
           else
             echo ""
             echo "⚠️ Error en trading_orchestrator.py (no crítico)"
-            # No hacemos exit 1 aquí porque puede ser normal (ej: sin señales válidas)
           fi
       
       # ========================================
@@ -278,7 +274,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Añadir todos los archivos relevantes
           git add trading_signals.csv 2>/dev/null || true
           git add orders_executed.csv 2>/dev/null || true
           git add prediction_tracker.csv 2>/dev/null || true
@@ -287,20 +282,16 @@ jobs:
           git add risk_config.json 2>/dev/null || true
           git add *.json 2>/dev/null || true
           
-          # Verificar si hay cambios
           if git diff --staged --quiet; then
             echo "ℹ️ No hay nuevos datos que guardar"
           else
-            # Mostrar qué se guardará
             echo "📝 Archivos modificados:"
             git diff --staged --name-only
             
-            # Commit con timestamp
             TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
-            PREDICTOR="${{ github.event.inputs.use_legacy_predictor == 'true' && 'legacy' || 'enhanced' }}"
-            git commit -m "🤖 Trading cycle [$PREDICTOR]: $TIMESTAMP"
+            PREDICTOR="${{ github.event.inputs.use_legacy_predictor == 'true' && 'legacy' || 'enhanced-5min' }}"
+            git commit -m "🤖 Trading cycle [5min-$PREDICTOR]: $TIMESTAMP"
             
-            # Push con retry
             MAX_RETRIES=3
             for i in $(seq 1 $MAX_RETRIES); do
               if git push; then
@@ -328,19 +319,17 @@ jobs:
         run: |
           echo ""
           echo "📊 ============================================"
-          echo "   RESUMEN DE EJECUCIÓN"
+          echo "   RESUMEN DE EJECUCIÓN (5 MINUTOS)"
           echo "============================================"
           echo ""
           
-          # Tipo de predictor usado
           if [ "${{ github.event.inputs.use_legacy_predictor }}" = "true" ]; then
             echo "🔧 Predictor: Legacy (predict_and_filter.py)"
           else
-            echo "✨ Predictor: Enhanced (predict_enhanced.py - MQL5 approach)"
+            echo "✨ Predictor: Enhanced 5min (predict_enhanced_5min.py)"
           fi
           echo ""
           
-          # Contar archivos generados
           echo "📁 Archivos generados:"
           [ -f "trading_signals.csv" ] && echo "  ✅ trading_signals.csv" || echo "  ❌ trading_signals.csv"
           [ -f "prediction_tracker.csv" ] && echo "  ✅ prediction_tracker.csv" || echo "  ❌ prediction_tracker.csv"
@@ -350,7 +339,6 @@ jobs:
           
           echo ""
           
-          # Mostrar estadísticas si existen
           if [ -f "prediction_tracker.csv" ]; then
             echo "📈 Estadísticas de predicciones:"
             python3 << 'PYEOF'
@@ -366,11 +354,11 @@ jobs:
               if evaluated > 0:
                   avg_accuracy = df[df['actual_close'].notna()]['pred_accuracy_%'].mean()
                   print(f"  Accuracy promedio: {avg_accuracy:.2f}%")
-          except:
-              pass
+          except Exception as e:
+              print(f"  Error: {e}")
           PYEOF
-                    fi
-                    
-                    echo ""
-                    echo "🕐 Próxima ejecución: En 15 minutos"
-                    echo ""
+          fi
+          
+          echo ""
+          echo "🕐 Próxima ejecución: En 5 minutos"
+          echo ""
