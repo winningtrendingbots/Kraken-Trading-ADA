@@ -124,6 +124,60 @@ def calculate_advanced_indicators(df):
     if Config.USE_PRICE_DERIVATIVES:
         df['price_1st_deriv'] = df['close'].diff()
         df['price_2nd_deriv'] = df['price_1st_deriv'].diff()
+
+     # ==== SOLUCIÓN 2: Cálculo robusto de derivadas ====
+    if 'volume' in df.columns:
+        # Primera derivada del volumen
+        volume_diff = df['volume'].diff()
+        df['volume_1st_deriv'] = volume_diff
+        
+        # Segunda derivada del volumen
+        df['volume_2nd_deriv'] = volume_diff.diff()
+        
+        # Normalizar derivadas si hay suficiente variación
+        for deriv_col in ['volume_1st_deriv', 'volume_2nd_deriv']:
+            if df[deriv_col].std() > 1e-10:  # Evitar división por cero
+                # Normalizar usando puntuación Z, pero recortando outliers
+                mean_val = df[deriv_col].mean()
+                std_val = df[deriv_col].std()
+                
+                # Calcular puntuación Z
+                z_scores = (df[deriv_col] - mean_val) / std_val
+                
+                # Recortar valores extremos (más de 5 desviaciones estándar)
+                z_scores_clipped = np.clip(z_scores, -5, 5)
+                
+                # Convertir de vuelta a escala original pero sin outliers extremos
+                df[deriv_col] = z_scores_clipped * std_val + mean_val
+    
+    # Derivada del precio con manejo robusto
+    price_diff = df['close'].diff()
+    df['price_1st_deriv'] = price_diff
+    
+    if df['price_1st_deriv'].std() > 1e-10:
+        mean_price_deriv = df['price_1st_deriv'].mean()
+        std_price_deriv = df['price_1st_deriv'].std()
+        z_scores_price = (df['price_1st_deriv'] - mean_price_deriv) / std_price_deriv
+        z_scores_price_clipped = np.clip(z_scores_price, -5, 5)
+        df['price_1st_deriv'] = z_scores_price_clipped * std_price_deriv + mean_price_deriv
+
+    # ==== SOLUCIÓN 1: Limpieza de NaN/Inf después de cálculos ====
+    # Reemplazar infinitos con NaN
+    df = df.replace([np.inf, -np.inf], np.nan)
+    
+    # Eliminar filas con NaN
+    initial_rows = len(df)
+    df = df.dropna()
+    rows_removed = initial_rows - len(df)
+    
+    if rows_removed > 0:
+        print(f"⚠️  Se eliminaron {rows_removed} filas con valores NaN/Inf")
+        print(f"📊 Filas restantes: {len(df)}")
+    
+    # Al final, aplicar limpieza completa
+    df = clean_financial_data(df, max_abs_value=1e6, fill_method='ffill')
+    
+    return df
     
     # 8. RSI de volumen
     def calculate_volume_rsi(volume, period=14):
@@ -343,6 +397,11 @@ def prepare_delta_dataset(df):
     
     # 1. Calcular indicadores avanzados
     df = calculate_advanced_indicators(df)
+
+     # Aplicar limpieza adicional si es necesario
+    if df.isnull().any().any() or np.isinf(df.values).any():
+        print("Aplicando limpieza adicional...")
+        df = clean_financial_data(df, max_abs_value=1e6, fill_method='ffill')
     
     # 2. Calcular deltas para la próxima vela
     df['delta_high'] = (df['high'].shift(-1) - df['close']) / df['close']
@@ -393,6 +452,13 @@ def prepare_delta_dataset(df):
     
     # 6. Normalización
     print(f"\n🔧 Normalización con {Config.SCALER_TYPE.upper()}...")
+
+    # Llamar a la función de depuración
+    problematic_cols = debug_data_issues(df, feature_cols)
+    
+    if problematic_cols:
+        print("⚠️  Problemas detectados. Aplicando limpieza...")
+        df = clean_financial_data(df)  # <-- LLAMAR AQUÍ LA FUNCIÓN 6
     
     if Config.SCALER_TYPE == 'robust':
         scaler_in = RobustScaler()
@@ -400,6 +466,71 @@ def prepare_delta_dataset(df):
     else:
         scaler_in = StandardScaler()
         scaler_out = StandardScaler()
+
+    # ==== SOLUCIÓN 3: Validación antes del escalado ====
+    print("🔍 Validando datos antes del escalado...")
+
+     # ==== SOLUCIÓN 4: Usar RobustScaler para outliers ====
+    # Opción A: RobustScaler (recomendado si hay outliers)
+    scaler_in = RobustScaler(quantile_range=(25, 75))
+    
+    # Opción B: StandardScaler con parámetros ajustados
+    # scaler_in = StandardScaler(with_mean=True, with_std=True)
+    
+    # Opción C: Combinación (escalar primero con Robust, luego con Standard)
+    # from sklearn.pipeline import Pipeline
+    # scaler_in = Pipeline([
+    #     ('robust', RobustScaler(quantile_range=(25, 75))),
+    #     ('standard', StandardScaler())
+    # ])
+    
+    print(f"📏 Usando scaler: {scaler_in.__class__.__name__}")
+    
+    # 1. Verificar NaN
+    nan_check = df[feature_cols].isnull().sum()
+    if nan_check.any():
+        print("❌ ERROR: Se encontraron valores NaN:")
+        for col, count in nan_check[nan_check > 0].items():
+            print(f"   - {col}: {count} NaN")
+        raise ValueError("Datos contienen NaN. Revisa calculate_advanced_indicators()")
+    
+    # 2. Verificar infinitos
+    inf_mask = np.isinf(df[feature_cols].values)
+    if inf_mask.any():
+        print("❌ ERROR: Se encontraron valores infinitos")
+        inf_cols = []
+        for i, col in enumerate(feature_cols):
+            if inf_mask[:, i].any():
+                inf_cols.append(col)
+        print(f"   Columnas con infinitos: {inf_cols}")
+        raise ValueError("Datos contienen valores infinitos")
+    
+    # 3. Verificar valores extremos
+    print("📊 Estadísticas de características:")
+    for col in feature_cols:
+        col_min = df[col].min()
+        col_max = df[col].max()
+        col_mean = df[col].mean()
+        col_std = df[col].std()
+        
+        print(f"   {col}: min={col_min:.6f}, max={col_max:.6f}, "
+              f"mean={col_mean:.6f}, std={col_std:.6f}")
+        
+        # Detectar valores sospechosamente grandes
+        if abs(col_max) > 1e6 or abs(col_min) > 1e6:
+            print(f"   ⚠️  Advertencia: {col} tiene valores > 1e6")
+            # Opcional: recortar valores extremos
+            df[col] = np.clip(df[col], -1e6, 1e6)
+    
+    # 4. Verificar desviaciones estándar cercanas a cero
+    near_zero_std = [col for col in feature_cols if df[col].std() < 1e-10]
+    if near_zero_std:
+        print(f"⚠️  Advertencia: Columnas con std cercana a cero: {near_zero_std}")
+        print("   Considera eliminar estas columnas o revisar su cálculo")
+    
+    # Ahora proceder con el escalado
+    print("✅ Validación completada. Aplicando escalado...")
+    X_train_scaled = scaler_in.fit_transform(X_train[feature_cols])
     
     # Fit en train
     X_train = scaler_in.fit_transform(df_train[feature_cols])
@@ -430,6 +561,183 @@ def prepare_delta_dataset(df):
     
     return (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
            scaler_in, scaler_out, feature_cols, target_cols
+
+def clean_financial_data(df, max_abs_value=1e6, fill_method='ffill'):
+    """
+    Pipeline completo para limpiar datos financieros
+    
+    Parámetros:
+    - df: DataFrame con datos financieros
+    - max_abs_value: valor máximo absoluto permitido (valores más grandes se recortan)
+    - fill_method: método para rellenar NaN ('ffill', 'bfill', 'mean', 'median', 'zero')
+    
+    Retorna:
+    - DataFrame limpio
+    """
+    print("\n🧹 INICIANDO LIMPIEZA DE DATOS FINANCIEROS")
+    initial_shape = df.shape
+    
+    # 1. Hacer copia para no modificar el original
+    df_clean = df.copy()
+    
+    # 2. Identificar columnas numéricas
+    numeric_cols = df_clean.select_dtypes(include=[np.number]).columns.tolist()
+    print(f"   Columnas numéricas detectadas: {len(numeric_cols)}")
+    
+    # 3. Paso 1: Reemplazar infinitos con NaN
+    inf_count_before = np.isinf(df_clean[numeric_cols].values).sum()
+    df_clean[numeric_cols] = df_clean[numeric_cols].replace([np.inf, -np.inf], np.nan)
+    print(f"   Paso 1: Reemplazados {inf_count_before} valores infinitos con NaN")
+    
+    # 4. Paso 2: Rellenar NaN según el método especificado
+    nan_count_before = df_clean[numeric_cols].isnull().sum().sum()
+    
+    if fill_method == 'ffill':
+        df_clean[numeric_cols] = df_clean[numeric_cols].fillna(method='ffill')
+    elif fill_method == 'bfill':
+        df_clean[numeric_cols] = df_clean[numeric_cols].fillna(method='bfill')
+    elif fill_method == 'mean':
+        for col in numeric_cols:
+            df_clean[col] = df_clean[col].fillna(df_clean[col].mean())
+    elif fill_method == 'median':
+        for col in numeric_cols:
+            df_clean[col] = df_clean[col].fillna(df_clean[col].median())
+    elif fill_method == 'zero':
+        df_clean[numeric_cols] = df_clean[numeric_cols].fillna(0)
+    else:  # Por defecto: ffill + bfill
+        df_clean[numeric_cols] = df_clean[numeric_cols].fillna(method='ffill').fillna(method='bfill')
+    
+    nan_count_after = df_clean[numeric_cols].isnull().sum().sum()
+    print(f"   Paso 2: Rellenados {nan_count_before - nan_count_after} NaN usando método '{fill_method}'")
+    
+    # 5. Paso 3: Si aún hay NaN (todas las columnas NaN en una fila), usar 0
+    if nan_count_after > 0:
+        df_clean = df_clean.fillna(0)
+        print(f"   Paso 3: Rellenados {nan_count_after} NaN restantes con 0")
+    
+    # 6. Paso 4: Recortar valores extremos
+    outliers_count = 0
+    for col in numeric_cols:
+        # Detectar outliers extremos
+        col_abs_max = df_clean[col].abs().max()
+        if col_abs_max > max_abs_value:
+            outliers_before = (df_clean[col].abs() > max_abs_value).sum()
+            df_clean[col] = np.clip(df_clean[col], -max_abs_value, max_abs_value)
+            outliers_count += outliers_before
+    
+    if outliers_count > 0:
+        print(f"   Paso 4: Recortados {outliers_count} valores extremos (> {max_abs_value})")
+    
+    # 7. Paso 5: Normalizar si hay valores muy pequeños (evitar underflow)
+    tiny_values_count = 0
+    for col in numeric_cols:
+        col_max_abs = df_clean[col].abs().max()
+        # Si todos los valores son muy pequeños pero no cero
+        if 0 < col_max_abs < 1e-10:
+            df_clean[col] = df_clean[col] * 1e10  # Escalar para evitar underflow
+            tiny_values_count += 1
+    
+    if tiny_values_count > 0:
+        print(f"   Paso 5: Escaladas {tiny_values_count} columnas con valores muy pequeños")
+    
+    # 8. Paso 6: Verificación final
+    final_nan = df_clean[numeric_cols].isnull().sum().sum()
+    final_inf = np.isinf(df_clean[numeric_cols].values).sum()
+    
+    if final_nan == 0 and final_inf == 0:
+        print(f"   ✅ LIMPIEZA COMPLETADA EXITOSAMENTE")
+    else:
+        print(f"   ⚠️  LIMPIEZA PARCIAL: {final_nan} NaN y {final_inf} Inf restantes")
+    
+    print(f"   📊 Forma original: {initial_shape} → Forma final: {df_clean.shape}")
+    print(f"   📈 Filas eliminadas: {initial_shape[0] - df_clean.shape[0]}")
+    print(f"   🎯 Columnas procesadas: {len(numeric_cols)}\n")
+    
+    return df_clean
+
+
+def debug_data_issues(df, feature_cols):
+    """
+    Función de depuración para identificar problemas específicos en los datos
+    """
+    print("\n" + "="*60)
+    print("🔧 DIAGNÓSTICO DETALLADO DE DATOS")
+    print("="*60)
+    
+    # 1. Resumen general
+    print(f"📊 Resumen del DataFrame:")
+    print(f"   - Filas totales: {len(df)}")
+    print(f"   - Columnas totales: {len(df.columns)}")
+    print(f"   - Columnas de características: {len(feature_cols)}")
+    
+    # 2. Verificar cada columna
+    print(f"\n📈 Estadísticas por columna:")
+    problematic_cols = []
+    
+    for i, col in enumerate(feature_cols, 1):
+        print(f"\n   {i:2d}. {col}:")
+        
+        # Valores NaN
+        nan_count = df[col].isnull().sum()
+        if nan_count > 0:
+            print(f"      ❌ NaN: {nan_count}")
+            problematic_cols.append((col, 'NaN'))
+        
+        # Valores infinitos
+        inf_mask = np.isinf(df[col].values)
+        inf_count = inf_mask.sum()
+        if inf_count > 0:
+            print(f"      ❌ Infinitos: {inf_count}")
+            problematic_cols.append((col, 'Inf'))
+        
+        # Estadísticas básicas
+        if nan_count == 0 and inf_count == 0:
+            print(f"      ✅ Min: {df[col].min():.6f}")
+            print(f"      ✅ Max: {df[col].max():.6f}")
+            print(f"      ✅ Media: {df[col].mean():.6f}")
+            print(f"      ✅ Std: {df[col].std():.6f}")
+            
+            # Detectar outliers (más de 5 std de la media)
+            mean = df[col].mean()
+            std = df[col].std()
+            if std > 0:
+                outliers = ((df[col] - mean).abs() > 5 * std).sum()
+                if outliers > 0:
+                    print(f"      ⚠️  Outliers (>5σ): {outliers}")
+                    problematic_cols.append((col, 'Outliers'))
+    
+    # 3. Identificar filas problemáticas
+    print(f"\n🔍 Buscando filas problemáticas...")
+    
+    # Filas con cualquier NaN
+    rows_with_nan = df[feature_cols].isnull().any(axis=1)
+    if rows_with_nan.any():
+        print(f"   Filas con NaN: {rows_with_nan.sum()}")
+        print("   Índices:", df[rows_with_nan].index.tolist()[:10])
+    
+    # Filas con cualquier Inf
+    rows_with_inf = np.isinf(df[feature_cols].values).any(axis=1)
+    if rows_with_inf.any():
+        print(f"   Filas con Inf: {rows_with_inf.sum()}")
+        print("   Índices:", df[rows_with_inf].index.tolist()[:10])
+    
+    # 4. Recomendaciones
+    print(f"\n💡 RECOMENDACIONES:")
+    if problematic_cols:
+        print("   Se detectaron problemas en las siguientes columnas:")
+        for col, issue in problematic_cols:
+            print(f"   - {col}: {issue}")
+        
+        print("\n   Acciones sugeridas:")
+        print("   1. Revisar calculate_advanced_indicators()")
+        print("   2. Aplicar clean_financial_data()")
+        print("   3. Considerar eliminar columnas problemáticas")
+    else:
+        print("   ✅ No se detectaron problemas graves en los datos")
+    
+    print("="*60 + "\n")
+    
+    return problematic_cols
 
 # ================================
 # 🏋️ ENTRENAMIENTO
@@ -719,6 +1027,12 @@ def main():
         
         # 1. Descargar datos
         df = download_and_prepare_data(symbol="ADA-USD", interval='1h')
+
+        # Aplicar limpieza desde el principio
+        df = clean_financial_data(df, max_abs_value=1e6, fill_method='ffill')
+        
+        # Luego preparar dataset
+        scaler_in, scaler_out, feature_cols, target_cols = prepare_delta_dataset(df)
         
         # 2. Preparar dataset
         (X_train, y_train), (X_val, y_val), (X_test, y_test), \
