@@ -28,7 +28,7 @@ jobs:
           echo "🕐 Workflow ejecutado: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "📋 Trigger: ${{ github.event_name }}"
           echo "🌿 Branch: ${{ github.ref }}"
-          echo "🔧 Predictor: ${{ github.event.inputs.use_legacy_predictor == 'true' && 'Legacy' || 'Enhanced (MQL5 - 5min)' }}"
+          echo "🔧 Predictor: ${{ '🔮 Generate predictions (Enhanced - 5min)' }}"
       
       - name: 📥 Checkout
         uses: actions/checkout@v4
