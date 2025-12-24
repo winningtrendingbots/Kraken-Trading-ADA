@@ -1,0 +1,294 @@
+name: 🔮 Predict & Trade (Hybrid Model)
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Cada 5 minutos
+  workflow_dispatch:
+    inputs:
+      use_legacy:
+        description: 'Usar predictor legacy'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  predict-and-trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: 📋 Log execution
+        run: |
+          echo "🕐 Workflow ejecutado: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "🌿 Branch: ${{ github.ref }}"
+          echo "🎯 Modelo: ${{ github.event.inputs.use_legacy == 'true' && 'Legacy' || 'Híbrido' }}"
+      
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🔍 Check hybrid model
+        id: check
+        run: |
+          echo "🔍 Verificando modelo híbrido..."
+          
+          if [ -f "ADAUSD_MODELS/adausd_hybrid_lstm.pth" ]; then
+            echo "✅ Modelo híbrido encontrado"
+            echo "has_model=true" >> $GITHUB_OUTPUT
+            
+            # Mostrar info
+            if [ -f "ADAUSD_MODELS/config_hybrid.json" ]; then
+              echo ""
+              echo "📊 Información del modelo:"
+              python3 << 'PYEOF'
+              import json, os, datetime
+              try:
+                  with open('ADAUSD_MODELS/config_hybrid.json', 'r') as f:
+                      config = json.load(f)
+                  
+                  # Información básica
+                  print(f"   Features: {config.get('input_size', 'N/A')}")
+                  print(f"   Outputs: {config.get('output_size', 'N/A')}")
+                  print(f"   Sequence: {config.get('seq_len', 'N/A')}")
+                  print(f"   Hidden: {config.get('hidden_size', 'N/A')}")
+                  print(f"   Bidirectional: {config.get('bidirectional', False)}")
+                  
+                  # Métricas
+                  if 'metrics_test' in config:
+                      metrics = config['metrics_test']
+                      print(f"\n   📈 Métricas R²:")
+                      for target in ['delta_high', 'delta_low', 'delta_close']:
+                          if target in metrics:
+                              r2 = metrics[target].get('R2', 0)
+                              print(f"      {target}: {r2:.4f}")
+                      
+                      avg_r2 = sum(m.get('R2', 0) for m in metrics.values()) / len(metrics)
+                      print(f"\n   🎯 R² promedio: {avg_r2:.4f}")
+                      
+                      if avg_r2 < 0.3:
+                          print("   ⚠️  Calidad baja - considerar reentrenamiento")
+                      elif avg_r2 < 0.5:
+                          print("   ✅ Calidad aceptable")
+                      else:
+                          print("   🎉 Calidad excelente")
+                  
+                  # Edad del modelo
+                  if 'timestamp' in config:
+                      import dateutil.parser
+                      train_time = dateutil.parser.parse(config['timestamp'])
+                      age = datetime.datetime.now(datetime.timezone.utc) - train_time.replace(tzinfo=datetime.timezone.utc)
+                      print(f"\n   🕐 Edad del modelo: {age.days} días")
+                      
+                      if age.days > 7:
+                          print("   🔄 Modelo desactualizado (>7 días)")
+                  
+              except Exception as e:
+                  print(f"   Error: {e}")
+              PYEOF
+                          fi
+                        else
+                          echo "❌ No hay modelo híbrido entrenado"
+                          echo "has_model=false" >> $GITHUB_OUTPUT
+                        fi
+      
+      - name: ⏳ Wait for model training
+        if: steps.check.outputs.has_model == 'false'
+        run: |
+          echo ""
+          echo "⏳ ============================================"
+          echo "   NO HAY MODELO HÍBRIDO ENTRENADO"
+          echo "============================================"
+          echo ""
+          echo "🎯 Para empezar a predecir:"
+          echo "   1. Ve a 'Actions' → 'Train Hybrid Model'"
+          echo "   2. Presiona 'Run workflow'"
+          echo "   3. Espera ~20-30 minutos"
+          echo ""
+          echo "✨ Beneficios del modelo híbrido:"
+          echo "   ✅ LSTM bidireccional con atención"
+          echo "   ✅ Derivadas de volumen avanzadas"
+          echo "   ✅ Detección de divergencias"
+          echo "   ✅ Validación de breakouts"
+          echo "   ✅ Predicciones ancladas al precio"
+          echo ""
+          exit 0
+      
+      - name: 🐍 Setup Python
+        if: steps.check.outputs.has_model == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 📦 Install dependencies
+        if: steps.check.outputs.has_model == 'true'
+        run: |
+          echo "📦 Instalando dependencias..."
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 🔮 Generate predictions (Hybrid Model)
+        if: steps.check.outputs.has_model == 'true' && github.event.inputs.use_legacy != 'true'
+        env:
+          KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
+          KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          echo ""
+          echo "🔮 ============================================"
+          echo "   GENERANDO PREDICCIONES (MODELO HÍBRIDO)"
+          echo "============================================"
+          echo ""
+          echo "✨ Características activas:"
+          echo "   • LSTM bidireccional con atención"
+          echo "   • Derivadas 1ra y 2da de volumen"
+          echo "   • Indicadores OBV, VWAP, PVT"
+          echo "   • Detección de divergencias"
+          echo "   • Validación de breakouts"
+          echo ""
+          
+          if python predict_delta_5min.py; then
+            echo ""
+            echo "✅ Predicción completada (Modelo Híbrido)"
+            
+            if [ -f "trading_signals.csv" ]; then
+              lines=$(wc -l < trading_signals.csv)
+              echo "✅ Señales guardadas: $lines"
+              
+              echo ""
+              echo "📊 Última señal generada:"
+              tail -n 1 trading_signals.csv
+            else
+              echo "⚠️ No se generaron señales de trading"
+            fi
+          else
+            echo ""
+            echo "❌ Error en predict_delta_5min.py"
+            exit 1
+          fi
+      
+      - name: 💼 Execute trades
+        if: steps.check.outputs.has_model == 'true'
+        env:
+          KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
+          KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          echo ""
+          echo "💼 ============================================"
+          echo "   EJECUTANDO ESTRATEGIA DE TRADING"
+          echo "============================================"
+          echo ""
+          
+          if python trading_orchestrator.py; then
+            echo ""
+            echo "✅ Trading ejecutado"
+          else
+            echo ""
+            echo "⚠️ Error en trading_orchestrator.py (no crítico)"
+          fi
+      
+      - name: 💾 Save results
+        if: steps.check.outputs.has_model == 'true'
+        run: |
+          echo ""
+          echo "💾 ============================================"
+          echo "   GUARDANDO RESULTADOS"
+          echo "============================================"
+          echo ""
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Archivos a guardar
+          files=0
+          for file in trading_signals.csv prediction_tracker.csv orders_executed.csv open_orders.json kraken_trades.csv; do
+            if [ -f "$file" ] && [ -s "$file" ]; then
+              git add "$file" 2>/dev/null
+              files=$((files + 1))
+            fi
+          done
+          
+          if [ $files -eq 0 ]; then
+            echo "ℹ️ No hay datos nuevos que guardar"
+          else
+            echo "📋 Archivos modificados ($files):"
+            git status --porcelain | grep -E "\.(csv|json)$" || true
+            
+            TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+            git commit -m "🤖 Trading cycle [Hybrid]: $TIMESTAMP"
+            
+            for i in {1..3}; do
+              if git push; then
+                echo "✅ Datos guardados correctamente"
+                break
+              elif [ $i -lt 3 ]; then
+                echo "⚠️ Reintentando push ($i/3)..."
+                sleep 2
+                git pull --rebase
+              else
+                echo "❌ Error al guardar datos"
+                exit 1
+              fi
+            done
+          fi
+      
+      - name: 📊 Execution summary
+        if: always() && steps.check.outputs.has_model == 'true'
+        run: |
+          echo ""
+          echo "📊 ============================================"
+          echo "   RESUMEN DE EJECUCIÓN"
+          echo "============================================"
+          echo ""
+          
+          echo "🎯 Modelo: ${{ github.event.inputs.use_legacy == 'true' && 'Legacy' || 'Híbrido' }}"
+          echo ""
+          
+          echo "📁 Archivos de datos:"
+          [ -f "trading_signals.csv" ] && lines=$(wc -l < trading_signals.csv) && echo "  ✅ trading_signals.csv ($lines)" || echo "  ❌ trading_signals.csv"
+          [ -f "prediction_tracker.csv" ] && lines=$(wc -l < prediction_tracker.csv) && echo "  ✅ prediction_tracker.csv ($lines)" || echo "  ❌ prediction_tracker.csv"
+          [ -f "orders_executed.csv" ] && lines=$(wc -l < orders_executed.csv) && echo "  ✅ orders_executed.csv ($((lines-1)))" || echo "  ⚠️ orders_executed.csv"
+          [ -f "open_orders.json" ] && echo "  ✅ open_orders.json" || echo "  ⚠️ open_orders.json"
+          [ -f "kraken_trades.csv" ] && lines=$(wc -l < kraken_trades.csv) && echo "  ✅ kraken_trades.csv ($((lines-1)))" || echo "  ⚠️ kraken_trades.csv"
+          
+          echo ""
+          
+          if [ -f "prediction_tracker.csv" ]; then
+            echo "📈 Estadísticas recientes:"
+            python3 << 'PYEOF'
+            import pandas as pd
+            try:
+                df = pd.read_csv('prediction_tracker.csv')
+                if len(df) > 0:
+                    recent = df.tail(20)
+                    
+                    buy_signals = (recent['signal'] == 'BUY').sum()
+                    sell_signals = (recent['signal'] == 'SELL').sum()
+                    hold_signals = (recent['signal'] == 'HOLD').sum()
+                    
+                    avg_confidence = recent['confidence'].mean()
+                    avg_delta = recent['delta_close_%'].mean()
+                    
+                    print(f"  Últimas 20 predicciones:")
+                    print(f"    BUY: {buy_signals}, SELL: {sell_signals}, HOLD: {hold_signals}")
+                    print(f"    Confianza promedio: {avg_confidence:.1f}%")
+                    print(f"    Delta promedio: {avg_delta:+.3f}%")
+                    
+                    # Tasa de señales válidas
+                    valid_signals = buy_signals + sell_signals
+                    if valid_signals > 0:
+                        signal_rate = valid_signals / 20 * 100
+                        print(f"    Tasa de señales: {signal_rate:.1f}%")
+            except Exception as e:
+                print(f"  Error: {e}")
+            PYEOF
+                      fi
+          
+          echo ""
+          echo "🕐 Próxima ejecución: En 5 minutos"
+          echo "🎯 Modelo híbrido activo"
+          echo ""
