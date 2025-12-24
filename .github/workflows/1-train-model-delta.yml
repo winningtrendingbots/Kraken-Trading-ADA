@@ -104,40 +104,40 @@ jobs:
             echo ""
             echo "📊 MÉTRICAS DEL MODELO:"
             python3 << 'PYEOF'
-import json
-try:
-    with open('ADAUSD_MODELS/config_hybrid.json', 'r') as f:
-        config = json.load(f)
-    
-    metrics = config.get('metrics_test', {})
-    
-    if metrics:
-        print("   Target          R²        MAE")
-        print("   ---------------------------------")
+          import json
+          try:
+              with open('ADAUSD_MODELS/config_hybrid.json', 'r') as f:
+                  config = json.load(f)
+              
+              metrics = config.get('metrics_test', {})
+              
+              if metrics:
+                  print("   Target          R²        MAE")
+                  print("   ---------------------------------")
+                  
+                  for target, data in metrics.items():
+                      r2 = data.get('R2', 0)
+                      mae = data.get('MAE', 0)
+                      print(f"   {target:12} {r2:8.4f}   {mae:8.6f}")
         
-        for target, data in metrics.items():
-            r2 = data.get('R2', 0)
-            mae = data.get('MAE', 0)
-            print(f"   {target:12} {r2:8.4f}   {mae:8.6f}")
-        
-        # Validación de calidad
-        avg_r2 = sum(m['R2'] for m in metrics.values()) / len(metrics)
-        print(f"\n   📈 R² promedio: {avg_r2:.4f}")
-        
-        if avg_r2 < 0:
-            print("   ⚠️  R² negativo - modelo no converge")
-        elif avg_r2 < 0.3:
-            print("   ⚠️  R² bajo - considerar ajustar hiperparámetros")
-        elif avg_r2 < 0.5:
-            print("   ✅ R² aceptable")
-        else:
-            print("   🎉 R² excelente")
-except Exception as e:
-    print(f"   Error: {e}")
-PYEOF
+                # Validación de calidad
+                avg_r2 = sum(m['R2'] for m in metrics.values()) / len(metrics)
+                print(f"\n   📈 R² promedio: {avg_r2:.4f}")
+                
+                if avg_r2 < 0:
+                    print("   ⚠️  R² negativo - modelo no converge")
+                elif avg_r2 < 0.3:
+                    print("   ⚠️  R² bajo - considerar ajustar hiperparámetros")
+                elif avg_r2 < 0.5:
+                    print("   ✅ R² aceptable")
+                else:
+                    print("   🎉 R² excelente")
+          except Exception as e:
+              print(f"   Error: {e}")
+                PYEOF
           else
-            echo "❌ No se encontró config_hybrid.json"
-          fi
+              echo "❌ No se encontró config_hybrid.json"
+            fi
       
       - name: 💾 Commit trained model
         if: steps.check.outputs.should_train == 'true'
