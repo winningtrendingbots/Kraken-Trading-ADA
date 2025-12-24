@@ -95,10 +95,19 @@ def get_account_balance():
         print("❌ No se pudo obtener balance")
         return None
     
-    # Buscar USD en el balance
-    usd_balance = float(result.get('USD', 0))
+    # 🔥 FIX: Kraken usa 'ZUSD' para USD
+    usd_balance = float(result.get('ZUSD', result.get('USD', 0)))
     
-    print(f"✅ Balance USD: ${usd_balance:.2f}")
+    # Debug: Mostrar todas las monedas disponibles
+    print(f"📊 Balances disponibles:")
+    for currency, amount in result.items():
+        if float(amount) > 0:
+            print(f"   • {currency}: {float(amount):.2f}")
+    
+    print(f"✅ Balance USD disponible: ${usd_balance:.2f}")
+    
+    if usd_balance < 5:
+        print(f"⚠️ Balance insuficiente para operar (mínimo $5)")
     
     return usd_balance
 
