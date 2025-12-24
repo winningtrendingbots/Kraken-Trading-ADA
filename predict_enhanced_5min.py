@@ -3,7 +3,7 @@ PREDICCIÓN CADA 5 MINUTOS - Usando modelo entrenado con velas 1h
 ✅ Normalización con min/max de 120 días
 ✅ Predice High, Low, Close de la siguiente vela
 ✅ Clasificación multi-factor mejorada
-✅ Ejecuta cada 5 minutos
+✅ 🔥 CORRECCIÓN: Auto-swap si High < Low
 """
 
 import pandas as pd
@@ -366,7 +366,7 @@ def save_prediction(timestamp, current_price, pred_high, pred_low, pred_close, r
         'signal': str(result['signal']),
         'confidence': float(round(result['confidence'], 1)),
         'rsi': float(round(result['rsi'], 1)),
-        'atr': 0.0,  # Se calcula aparte
+        'atr': 0.0,
         'trend': str(result['momentum']),
         'order_opened': 'NO',
         'order_id': None,
@@ -535,18 +535,47 @@ def main():
     pred_normalized = pred.numpy()[0]
     
     # Desnormalizar
-    pred_high = denormalize_prices(pred_normalized[0], min_price, max_price)
-    pred_low = denormalize_prices(pred_normalized[1], min_price, max_price)
-    pred_close = denormalize_prices(pred_normalized[2], min_price, max_price)
+    pred_high_raw = denormalize_prices(pred_normalized[0], min_price, max_price)
+    pred_low_raw = denormalize_prices(pred_normalized[1], min_price, max_price)
+    pred_close_raw = denormalize_prices(pred_normalized[2], min_price, max_price)
+    
+    # 🔥 CORRECCIÓN: Si High < Low, intercambiar
+    if pred_high_raw < pred_low_raw:
+        print(f"⚠️ Predicción invertida detectada:")
+        print(f"   Raw High: ${pred_high_raw:.4f}")
+        print(f"   Raw Low: ${pred_low_raw:.4f}")
+        print(f"   → Intercambiando valores...\n")
+        
+        pred_high = pred_low_raw
+        pred_low = pred_high_raw
+    else:
+        pred_high = pred_high_raw
+        pred_low = pred_low_raw
+    
+    # Asegurar que Close esté en el rango [Low, High]
+    pred_close = np.clip(pred_close_raw, pred_low, pred_high)
+    
+    if pred_close != pred_close_raw:
+        print(f"⚠️ Close ajustado al rango:")
+        print(f"   Raw Close: ${pred_close_raw:.4f}")
+        print(f"   Adjusted: ${pred_close:.4f}\n")
     
     print("="*70)
-    print("  📊 PREDICCIÓN")
+    print("  📊 PREDICCIÓN (CORREGIDA)")
     print("="*70)
     print(f"Precio Actual:   ${current_price:.4f}")
     print(f"Pred High:       ${pred_high:.4f} ({((pred_high-current_price)/current_price*100):+.2f}%)")
     print(f"Pred Low:        ${pred_low:.4f} ({((pred_low-current_price)/current_price*100):+.2f}%)")
     print(f"Pred Close:      ${pred_close:.4f} ({((pred_close-current_price)/current_price*100):+.2f}%)")
+    print(f"Rango:           ${pred_high - pred_low:.4f} ({((pred_high - pred_low)/current_price*100):.2f}%)")
     print("="*70 + "\n")
+    
+    # Verificación final
+    if pred_high < pred_low:
+        error_msg = f"❌ ERROR CRÍTICO: Aún hay inversión después de corrección"
+        print(error_msg)
+        send_telegram(error_msg)
+        return
     
     # 7. CALCULAR INDICADORES
     print("📊 Calculando indicadores...")
