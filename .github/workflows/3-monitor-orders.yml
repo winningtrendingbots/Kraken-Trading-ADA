@@ -26,15 +26,15 @@ jobs:
           if [ -f "open_orders.json" ]; then
             # Contar órdenes usando Python
             order_count=$(python3 << 'PYEOF'
-import json
-try:
-    with open('open_orders.json', 'r') as f:
-        data = json.load(f)
-    print(len(data))
-except:
-    print(0)
-PYEOF
-)
+          import json
+          try:
+              with open('open_orders.json', 'r') as f:
+                  data = json.load(f)
+                  print(len(data))
+          except:
+              print(0)
+          PYEOF
+          )
             
             if [ "$order_count" -gt 0 ]; then
               echo "📊 Órdenes abiertas: $order_count"
