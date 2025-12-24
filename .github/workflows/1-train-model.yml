@@ -74,7 +74,7 @@ jobs:
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           echo "Iniciando entrenamiento del modelo LSTM..."
-          python adausd_lstm.py
+          python adausd_lstm_5min.py
           echo "Entrenamiento completado"
       
       - name: Commit model
