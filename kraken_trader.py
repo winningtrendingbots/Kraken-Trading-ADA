@@ -1,9 +1,9 @@
 """
-KRAKEN TRADER - VERSIÓN CORREGIDA PARA MARGIN
+KRAKEN TRADER - VERSIÓN HÍBRIDA
 
-✅ Lee balance de MARGIN (no spot)
-✅ Ejecuta órdenes EN KRAKEN
-✅ Protección contra comisiones del 100%
+✅ Ordenes con STOP-LOSS automático
+✅ Monitoreo manual para TAKE-PROFIT
+✅ Protección total: si el bot falla, el SL te salva
 """
 
 import pandas as pd
@@ -85,19 +85,15 @@ def kraken_request(uri_path, data):
         return None
 
 def get_account_balance():
-    """
-    🔥 FIXED: Obtiene balance de MARGIN (no spot)
-    """
+    """Obtiene balance de MARGIN"""
     print("\n💰 Obteniendo balance de Kraken (MARGIN)...")
     
-    # 1. Primero intentar TradeBalance (incluye margin)
     result = kraken_request('/0/private/TradeBalance', {'asset': 'ZUSD'})
     
     if result:
-        # eb = equivalent balance (spot + margin disponible)
         margin_balance = float(result.get('eb', 0))
-        free_margin = float(result.get('mf', 0))  # margin free
-        used_margin = float(result.get('m', 0))   # margin used
+        free_margin = float(result.get('mf', 0))
+        used_margin = float(result.get('m', 0))
         
         print(f"📊 Balance de Trading:")
         print(f"   💵 Total disponible: ${margin_balance:.2f}")
@@ -107,9 +103,8 @@ def get_account_balance():
         if free_margin < 5:
             print(f"⚠️ Margen libre insuficiente para operar (mínimo $5)")
         
-        return free_margin  # Devolver solo el margen LIBRE
+        return free_margin
     
-    # 2. Fallback: Balance normal (por si acaso)
     print("⚠️ TradeBalance falló, intentando Balance normal...")
     result_spot = kraken_request('/0/private/Balance', {})
     
@@ -205,25 +200,47 @@ def check_existing_orders():
     
     return False
 
-def place_margin_order(side, volume, leverage, entry_price=None):
+def place_margin_order_with_sl(side, volume, leverage, entry_price, stop_loss):
     """
-    Coloca orden de MARGIN en Kraken
+    🔥 NUEVO: Coloca orden con STOP-LOSS AUTOMÁTICO
+    
+    Args:
+        side: 'buy' o 'sell'
+        volume: Cantidad de ADA
+        leverage: Multiplicador (2-5)
+        entry_price: Precio actual (para referencia)
+        stop_loss: Precio del stop loss
+    
+    Returns:
+        dict con order_id y detalles
     """
-    print(f"\n📤 Colocando orden MARGIN {side.upper()}...")
+    print(f"\n📤 Colocando orden MARGIN {side.upper()} con SL automático...")
     print(f"   Volumen: {volume} ADA")
     print(f"   Leverage: {leverage}x")
+    print(f"   Entry: ${entry_price:.4f}")
+    print(f"   Stop Loss: ${stop_loss:.4f}")
     
+    # Calcular precio límite del SL (5% peor que el trigger)
+    if side == 'buy':
+        sl_limit_price = stop_loss * 0.995  # 0.5% peor
+    else:
+        sl_limit_price = stop_loss * 1.005
+    
+    # Orden principal
     order_data = {
         'pair': PAIR,
         'type': side,
-        'ordertype': 'market' if entry_price is None else 'limit',
+        'ordertype': 'market',
         'volume': str(volume),
         'leverage': str(leverage),
-        'oflags': 'post'
+        'oflags': 'post',  # Maker fee
+        # 🔥 STOP-LOSS automático adjunto
+        'close': json.dumps({
+            'ordertype': 'stop-loss-limit',
+            'price': str(stop_loss),        # Trigger
+            'price2': str(sl_limit_price)   # Límite
+        })
     }
-    
-    if entry_price:
-        order_data['price'] = str(entry_price)
     
     result = kraken_request('/0/private/AddOrder', order_data)
     
@@ -234,12 +251,14 @@ def place_margin_order(side, volume, leverage, entry_price=None):
     order_id = result['txid'][0]
     
     print(f"✅ Orden colocada: {order_id}")
+    print(f"🛡️ Stop-Loss automático configurado en ${stop_loss:.4f}")
     
     return {
         'order_id': order_id,
         'side': side,
         'volume': volume,
         'leverage': leverage,
+        'has_auto_sl': True,
         'timestamp': datetime.now().isoformat()
     }
 
@@ -257,7 +276,8 @@ def save_order_to_tracking(order_info, signal_info, position_info):
         'margin_used': position_info['margin_required'],
         'liquidation_price': position_info['liquidation_price'],
         'expected_tp': signal_info.get('pred_close', 0),
-        'expected_risk': position_info['risk_amount']
+        'expected_risk': position_info['risk_amount'],
+        'has_auto_sl': order_info.get('has_auto_sl', False)
     }
     
     df_order = pd.DataFrame([order_data])
@@ -279,7 +299,8 @@ def save_order_to_tracking(order_info, signal_info, position_info):
         'stop_loss': signal_info['current_price'] * 0.98 if order_info['side'] == 'buy' else signal_info['current_price'] * 1.02,
         'take_profit': signal_info.get('pred_close', signal_info['current_price'] * 1.03),
         'margin_used': position_info['margin_required'],
-        'liquidation_price': position_info['liquidation_price']
+        'liquidation_price': position_info['liquidation_price'],
+        'has_auto_sl': order_info.get('has_auto_sl', False)
     }
     
     if os.path.exists(OPEN_ORDERS_FILE):
@@ -294,6 +315,32 @@ def save_order_to_tracking(order_info, signal_info, position_info):
         json.dump(orders, f, indent=2)
     
     print(f"✅ Orden guardada en {OPEN_ORDERS_FILE}")
+
+def close_position(order_id, side, volume):
+    """
+    Cierra una posición manualmente (para TP o timeout)
+    """
+    print(f"\n🔄 Cerrando posición {order_id}...")
+    
+    # Para cerrar una posición long, hacemos sell (y viceversa)
+    close_side = 'sell' if side == 'buy' else 'buy'
+    
+    close_data = {
+        'pair': PAIR,
+        'type': close_side,
+        'ordertype': 'market',
+        'volume': str(volume),
+        'leverage': '0'  # Sin leverage para cerrar
+    }
+    
+    result = kraken_request('/0/private/AddOrder', close_data)
+    
+    if result:
+        print(f"✅ Posición cerrada: {result['txid'][0]}")
+        return True
+    else:
+        print(f"❌ Error al cerrar posición")
+        return False
 
 def execute_trading_strategy():
     """
@@ -320,7 +367,6 @@ def execute_trading_strategy():
     print(f"\n🎯 Procesando señal: {signal['signal']}")
     print(f"   Confianza: {signal['confidence']:.1f}%")
     
-    # 🔥 AQUÍ USA LA FUNCIÓN CORREGIDA
     balance = get_account_balance()
     
     if not balance or balance < 5:
@@ -349,8 +395,8 @@ def execute_trading_strategy():
     
     print(f"\n📊 Setup del Trade:")
     print(f"   Entry: ${current_price:.4f}")
-    print(f"   Stop Loss: ${stop_loss:.4f}")
-    print(f"   Take Profit: ${take_profit:.4f}")
+    print(f"   Stop Loss: ${stop_loss:.4f} (automático)")
+    print(f"   Take Profit: ${take_profit:.4f} (monitoreo manual)")
     
     trade_validation = rm.validate_trade(current_price, take_profit, stop_loss, side)
     
@@ -384,12 +430,15 @@ def execute_trading_strategy():
     print(f"   Liquidación: ${position['liquidation_price']:.4f}")
     print(f"   Fees totales: ${position['total_fees_usd']:.2f}")
     
-    print(f"\n🚀 EJECUTANDO ORDEN EN KRAKEN...")
+    print(f"\n🚀 EJECUTANDO ORDEN EN KRAKEN CON SL AUTOMÁTICO...")
     
-    order_result = place_margin_order(
+    # 🔥 USAR LA NUEVA FUNCIÓN CON SL
+    order_result = place_margin_order_with_sl(
         side=side,
         volume=position['volume'],
-        leverage=position['leverage']
+        leverage=position['leverage'],
+        entry_price=current_price,
+        stop_loss=stop_loss
     )
     
     if not order_result:
@@ -416,8 +465,8 @@ def execute_trading_strategy():
    • Margen: ${position['margin_required']:.2f}
 
 🎯 *Objetivos:*
-   • TP: ${take_profit:.4f}
-   • SL: ${stop_loss:.4f}
+   • TP: ${take_profit:.4f} (monitoreo manual)
+   • SL: ${stop_loss:.4f} 🛡️ *AUTOMÁTICO*
    • R/R: {trade_validation['rr_ratio']:.2f}
    • Liquidación: ${position['liquidation_price']:.4f}
 
@@ -436,8 +485,11 @@ def execute_trading_strategy():
     print("="*70)
 
 def monitor_orders():
-    """Monitorea y cierra órdenes abiertas"""
-    print("\n🔍 Monitoreando órdenes abiertas...")
+    """
+    Monitorea órdenes abiertas - Solo revisa TAKE PROFIT
+    (El stop-loss es automático en Kraken)
+    """
+    print("\n🔍 Monitoreando órdenes abiertas (solo TP)...")
     
     if not os.path.exists(OPEN_ORDERS_FILE):
         print("ℹ️ No hay órdenes que monitorear")
@@ -464,33 +516,29 @@ def monitor_orders():
         print(f"   Entry: ${order_info['entry_price']:.4f}")
         print(f"   Current: ${current_price:.4f}")
         print(f"   TP: ${order_info['take_profit']:.4f}")
-        print(f"   SL: ${order_info['stop_loss']:.4f}")
+        print(f"   SL: ${order_info['stop_loss']:.4f} {'🛡️ (auto)' if order_info.get('has_auto_sl') else ''}")
         
+        close_reason = None
+        
+        # Solo revisar TP y TIMEOUT (el SL es automático)
         if order_info['side'] == 'buy':
             pnl_pct = ((current_price - order_info['entry_price']) / order_info['entry_price']) * 100
             
             if current_price >= order_info['take_profit']:
                 print("✅ TP alcanzado - Cerrando posición")
                 close_reason = 'TP'
-            elif current_price <= order_info['stop_loss']:
-                print("🛑 SL alcanzado - Cerrando posición")
-                close_reason = 'SL'
             else:
                 print(f"💹 P&L actual: {pnl_pct:+.2f}%")
-                continue
         else:
             pnl_pct = ((order_info['entry_price'] - current_price) / order_info['entry_price']) * 100
             
             if current_price <= order_info['take_profit']:
                 print("✅ TP alcanzado - Cerrando posición")
                 close_reason = 'TP'
-            elif current_price >= order_info['stop_loss']:
-                print("🛑 SL alcanzado - Cerrando posición")
-                close_reason = 'SL'
             else:
                 print(f"💹 P&L actual: {pnl_pct:+.2f}%")
-                continue
         
+        # Verificar timeout (3.5 horas)
         entry_time = datetime.fromisoformat(order_info['entry_time'])
         time_open = datetime.now() - entry_time
         
@@ -498,9 +546,26 @@ def monitor_orders():
             print("⏰ Timeout alcanzado (3.5h) - Cerrando para evitar rollover")
             close_reason = 'TIMEOUT'
         
-        print(f"🔄 Cerrando por {close_reason}...")
-        del orders[order_id]
+        # Cerrar si hay razón
+        if close_reason:
+            success = close_position(
+                order_id,
+                order_info['side'],
+                order_info['volume']
+            )
+            
+            if success:
+                # Remover de open_orders
+                del orders[order_id]
+                
+                msg = f"🔔 *Posición Cerrada*\n\n"
+                msg += f"Razón: {close_reason}\n"
+                msg += f"P&L: {pnl_pct:+.2f}%\n"
+                msg += f"Tiempo abierto: {time_open}"
+                
+                send_telegram(msg)
     
+    # Guardar órdenes actualizadas
     with open(OPEN_ORDERS_FILE, 'w') as f:
         json.dump(orders, f, indent=2)
 
