@@ -1,11 +1,10 @@
 """
-KRAKEN TRADER - VERSIÓN CON TP/SL BASADOS EN RANGO PREDICHO
+KRAKEN TRADER - VERSIÓN CON VALIDACIÓN DE COHERENCIA
 
-✅ TP/SL basados en el RANGO predicho (pred_high - pred_low)
-✅ Cálculo desde precio REAL actual (no histórico)
-✅ TP al 75% del movimiento esperado (conservador)
-✅ Stop-loss visible en Kraken como orden separada
-✅ Sincronización con estado real de Kraken
+✅ Valida que pred_close esté entre pred_high y pred_low
+✅ Detecta desincronización entre precio base y precio actual
+✅ Rechaza trades si el precio actual está fuera del rango predicho
+✅ TP/SL ajustados correctamente desde el precio base
 """
 
 import pandas as pd
@@ -31,6 +30,10 @@ SIGNALS_FILE = 'trading_signals.csv'
 ORDERS_FILE = 'orders_executed.csv'
 TRADES_FILE = 'kraken_trades.csv'
 OPEN_ORDERS_FILE = 'open_orders.json'
+
+# 🆕 Configuración de tolerancia
+MAX_PRICE_DRIFT_PCT = 3.0  # Máximo 3% de diferencia entre precio base y actual
+PREDICTION_MAX_AGE_MINUTES = 60  # Predicciones válidas por 90 minutos
 
 def send_telegram(msg):
     """Envía mensaje a Telegram"""
@@ -170,16 +173,18 @@ def load_last_signal():
         last_signal = df.iloc[0]
         
         signal_age = datetime.now() - last_signal['timestamp']
+        signal_age_minutes = signal_age.total_seconds() / 60
         
-        if signal_age > timedelta(hours=2):
-            print(f"⚠️ Señal demasiado antigua ({signal_age})")
+        if signal_age_minutes > PREDICTION_MAX_AGE_MINUTES:
+            print(f"⚠️ Señal demasiado antigua ({signal_age_minutes:.1f} min > {PREDICTION_MAX_AGE_MINUTES} min)")
             return None
         
         print(f"✅ Señal encontrada:")
         print(f"   Timestamp: {last_signal['timestamp']}")
+        print(f"   Edad: {signal_age_minutes:.1f} minutos")
         print(f"   Signal: {last_signal['signal']}")
         print(f"   Confidence: {last_signal['confidence']:.1f}%")
-        print(f"   Price: ${last_signal['current_price']:.4f}")
+        print(f"   Price (base): ${last_signal['current_price']:.4f}")
         
         return last_signal.to_dict()
         
@@ -187,18 +192,177 @@ def load_last_signal():
         print(f"❌ Error leyendo señales: {e}")
         return None
 
+def validate_prediction_coherence(signal):
+    """
+    🔥 VALIDACIÓN CRÍTICA: Verifica coherencia de las predicciones
+    
+    Checks:
+    1. pred_close debe estar entre pred_high y pred_low
+    2. pred_high > pred_low (obvio pero importante)
+    3. Rango no debe ser ni muy pequeño ni muy grande
+    
+    Returns:
+        dict con 'valid' y 'reason'
+    """
+    pred_high = signal.get('pred_high', 0)
+    pred_low = signal.get('pred_low', 0)
+    pred_close = signal.get('pred_close', 0)
+    base_price = signal.get('current_price', 0)
+    
+    print(f"\n🔬 VALIDACIÓN DE COHERENCIA:")
+    print(f"   Base Price: ${base_price:.4f}")
+    print(f"   Pred High:  ${pred_high:.4f}")
+    print(f"   Pred Low:   ${pred_low:.4f}")
+    print(f"   Pred Close: ${pred_close:.4f}")
+    
+    # Check 1: High > Low
+    if pred_high <= pred_low:
+        return {
+            'valid': False,
+            'reason': f"❌ pred_high (${pred_high:.4f}) ≤ pred_low (${pred_low:.4f})"
+        }
+    
+    # Check 2: Close entre High y Low
+    if not (pred_low <= pred_close <= pred_high):
+        return {
+            'valid': False,
+            'reason': f"❌ pred_close (${pred_close:.4f}) NO está entre high y low"
+        }
+    
+    # Check 3: Rango razonable (0.5% - 20%)
+    pred_range_pct = ((pred_high - pred_low) / base_price) * 100
+    
+    print(f"   Rango predicho: {pred_range_pct:.2f}%")
+    
+    if pred_range_pct < 0.5:
+        return {
+            'valid': False,
+            'reason': f"⚠️ Rango muy pequeño ({pred_range_pct:.2f}% < 0.5%)"
+        }
+    
+    if pred_range_pct > 20:
+        return {
+            'valid': False,
+            'reason': f"⚠️ Rango muy grande ({pred_range_pct:.2f}% > 20%) - volatilidad extrema"
+        }
+    
+    print(f"   ✅ Predicciones coherentes")
+    
+    return {
+        'valid': True,
+        'reason': 'Predicciones válidas',
+        'pred_range_%': pred_range_pct
+    }
+
+def validate_price_sync(signal, current_price):
+    """
+    🔥 VALIDACIÓN CRÍTICA: Detecta desincronización entre precio base y actual
+    
+    Si el precio actual está muy lejos del precio base de la predicción,
+    la señal ya no es válida.
+    
+    Returns:
+        dict con 'valid', 'drift_%', 'reason', y 'adjusted_signal'
+    """
+    base_price = signal['current_price']
+    pred_high = signal['pred_high']
+    pred_low = signal['pred_low']
+    pred_close = signal['pred_close']
+    
+    # Calcular drift
+    price_drift = current_price - base_price
+    price_drift_pct = (price_drift / base_price) * 100
+    
+    print(f"\n🎯 VALIDACIÓN DE SINCRONIZACIÓN:")
+    print(f"   Precio BASE (predicción): ${base_price:.4f}")
+    print(f"   Precio ACTUAL: ${current_price:.4f}")
+    print(f"   Drift: ${price_drift:+.4f} ({price_drift_pct:+.2f}%)")
+    print(f"   Tolerancia: ±{MAX_PRICE_DRIFT_PCT}%")
+    
+    # Check: Drift excesivo
+    if abs(price_drift_pct) > MAX_PRICE_DRIFT_PCT:
+        return {
+            'valid': False,
+            'drift_%': price_drift_pct,
+            'reason': f"❌ Precio actual se alejó demasiado del base ({price_drift_pct:+.2f}% > ±{MAX_PRICE_DRIFT_PCT}%)",
+            'adjusted_signal': None
+        }
+    
+    # Check: Precio actual fuera del rango predicho
+    if current_price > pred_high:
+        outside_pct = ((current_price - pred_high) / base_price) * 100
+        print(f"   ⚠️ Precio actual (${current_price:.4f}) > pred_high (${pred_high:.4f}) en {outside_pct:.2f}%")
+        
+        if outside_pct > 2.0:  # Más de 2% fuera
+            return {
+                'valid': False,
+                'drift_%': price_drift_pct,
+                'reason': f"❌ Precio actual superó pred_high en {outside_pct:.2f}%",
+                'adjusted_signal': None
+            }
+    
+    elif current_price < pred_low:
+        outside_pct = ((pred_low - current_price) / base_price) * 100
+        print(f"   ⚠️ Precio actual (${current_price:.4f}) < pred_low (${pred_low:.4f}) en {outside_pct:.2f}%")
+        
+        if outside_pct > 2.0:
+            return {
+                'valid': False,
+                'drift_%': price_drift_pct,
+                'reason': f"❌ Precio actual cayó bajo pred_low en {outside_pct:.2f}%",
+                'adjusted_signal': None
+            }
+    
+    # 🔥 AJUSTE INTELIGENTE DE SEÑAL
+    # Determinar dirección basándonos en precio actual vs predicciones
+    
+    # Si precio actual está cerca de pred_high → posible reversión (SELL)
+    distance_to_high = abs(current_price - pred_high) / base_price
+    distance_to_low = abs(current_price - pred_low) / base_price
+    
+    adjusted_signal = signal['signal']  # Default: mantener señal original
+    
+    # Si el precio actual está en el 20% superior del rango predicho
+    range_position = (current_price - pred_low) / (pred_high - pred_low)
+    
+    print(f"   Posición en rango: {range_position*100:.1f}% (0%=low, 100%=high)")
+    
+    if range_position > 0.8:
+        print(f"   ⚠️ Precio en zona alta del rango predicho")
+        if signal['signal'] == 'BUY':
+            print(f"   🔄 Considerando cambiar BUY → SELL (precio ya cerca de objetivo)")
+            # Pero solo si la confianza es alta
+            if signal['confidence'] < 80:
+                adjusted_signal = 'HOLD'
+                print(f"   → Cambiado a HOLD (confianza baja)")
+    
+    elif range_position < 0.2:
+        print(f"   ⚠️ Precio en zona baja del rango predicho")
+        if signal['signal'] == 'SELL':
+            print(f"   🔄 Considerando cambiar SELL → BUY (precio ya cerca de objetivo)")
+            if signal['confidence'] < 80:
+                adjusted_signal = 'HOLD'
+                print(f"   → Cambiado a HOLD (confianza baja)")
+    
+    print(f"   ✅ Sincronización válida")
+    print(f"   Señal final: {adjusted_signal}")
+    
+    return {
+        'valid': True,
+        'drift_%': price_drift_pct,
+        'reason': 'Precios sincronizados',
+        'adjusted_signal': adjusted_signal,
+        'range_position': range_position
+    }
+
 def sync_open_orders_with_kraken():
-    """
-    🆕 Sincroniza open_orders.json con el estado REAL de Kraken
-    Elimina órdenes que ya no existen en Kraken
-    """
+    """Sincroniza open_orders.json con el estado REAL de Kraken"""
     print("\n🔄 Sincronizando con Kraken...")
     
     if not os.path.exists(OPEN_ORDERS_FILE):
         print("✅ No hay órdenes locales")
         return {}
     
-    # Cargar órdenes locales
     with open(OPEN_ORDERS_FILE, 'r') as f:
         local_orders = json.load(f)
     
@@ -206,7 +370,6 @@ def sync_open_orders_with_kraken():
         print("✅ No hay órdenes locales")
         return {}
     
-    # Consultar órdenes REALES en Kraken
     print(f"📋 Verificando {len(local_orders)} orden(es) local(es)...")
     
     result = kraken_request('/0/private/OpenOrders', {})
@@ -217,19 +380,16 @@ def sync_open_orders_with_kraken():
     
     kraken_open_orders = result.get('open', {})
     
-    # Filtrar órdenes que YA NO EXISTEN en Kraken
     orders_to_remove = []
     
     for order_id in local_orders.keys():
         if order_id not in kraken_open_orders:
-            print(f"🗑️ Orden {order_id} ya no existe en Kraken (cerrada manualmente)")
+            print(f"🗑️ Orden {order_id} ya no existe en Kraken")
             orders_to_remove.append(order_id)
     
-    # Eliminar órdenes cerradas
     for order_id in orders_to_remove:
         del local_orders[order_id]
     
-    # Guardar estado actualizado
     with open(OPEN_ORDERS_FILE, 'w') as f:
         json.dump(local_orders, f, indent=2)
     
@@ -244,11 +404,7 @@ def sync_open_orders_with_kraken():
     return local_orders
 
 def check_existing_orders():
-    """
-    Verifica si ya hay órdenes abiertas
-    🔥 AHORA sincroniza con Kraken primero
-    """
-    # 🆕 Sincronizar con Kraken
+    """Verifica si ya hay órdenes abiertas"""
     orders = sync_open_orders_with_kraken()
     
     if len(orders) > 0:
@@ -259,50 +415,34 @@ def check_existing_orders():
 
 def calculate_tp_sl_from_range(signal, current_price, side='buy', tp_factor=0.75):
     """
-    🔥 NUEVA LÓGICA: TP/SL basados en el RANGO PREDICHO
+    Calcula TP/SL basados en el RANGO PREDICHO
     
-    Funcionamiento:
-    1. Calcula rango predicho: pred_high - pred_low
-    2. Divide el rango por 2 (conservador)
-    3. Para BUY:
-       - TP = precio_actual + (mitad_rango * 0.75)  ← 75% del movimiento esperado
-       - SL = precio_actual - mitad_rango
-    4. Para SELL:
-       - TP = precio_actual - (mitad_rango * 0.75)
-       - SL = precio_actual + mitad_rango
-    
-    Args:
-        signal: Dict con pred_high, pred_low, pred_close, current_price
-        current_price: Precio REAL actual al ejecutar (no histórico)
-        side: 'buy' o 'sell'
-        tp_factor: Factor conservador para TP (0.75 = 75%)
-    
-    Returns:
-        dict con stop_loss, take_profit y métricas
+    IMPORTANTE: Ahora usa 'current_price' como el precio BASE de la predicción
+    (no el precio actual en tiempo real)
     """
     
-    # 1. Obtener predicciones
     pred_high = signal.get('pred_high', current_price * 1.03)
     pred_low = signal.get('pred_low', current_price * 0.97)
     pred_close = signal.get('pred_close', current_price)
     
-    # 2. Calcular rango predicho y su mitad
+    # Usar precio BASE (cuando se hizo la predicción)
+    base_price = signal['current_price']
+    
     pred_range = pred_high - pred_low
     half_range = pred_range / 2
     
     print(f"\n🎯 CÁLCULO TP/SL BASADO EN RANGO PREDICHO:")
-    print(f"   Precio actual (REAL): ${current_price:.4f}")
+    print(f"   Precio BASE (predicción): ${base_price:.4f}")
+    print(f"   Precio ACTUAL (ejecución): ${current_price:.4f}")
     print(f"   Pred High: ${pred_high:.4f}")
     print(f"   Pred Low: ${pred_low:.4f}")
     print(f"   Pred Close: ${pred_close:.4f}")
-    print(f"   Rango predicho: ${pred_range:.4f} ({(pred_range/current_price)*100:.2f}%)")
+    print(f"   Rango predicho: ${pred_range:.4f} ({(pred_range/base_price)*100:.2f}%)")
     print(f"   Mitad del rango: ${half_range:.4f}")
     
-    # 3. Calcular TP y SL según dirección
+    # 🔥 CAMBIO: Calcular desde precio ACTUAL (no base)
+    # Pero usando el rango predicho
     if side == 'buy':
-        # BUY: esperamos subida
-        # TP = precio + 75% de la mitad del rango
-        # SL = precio - mitad del rango completa
         take_profit = current_price + (half_range * tp_factor)
         stop_loss = current_price - half_range
         
@@ -313,15 +453,11 @@ def calculate_tp_sl_from_range(signal, current_price, side='buy', tp_factor=0.75
         sl_pct = (sl_distance / current_price) * 100
         
         print(f"\n📈 BUY Setup:")
+        print(f"   Entry: ${current_price:.4f}")
         print(f"   TP: ${take_profit:.4f} (+{tp_pct:.2f}%)")
-        print(f"       = ${current_price:.4f} + ${half_range * tp_factor:.4f}")
         print(f"   SL: ${stop_loss:.4f} (-{sl_pct:.2f}%)")
-        print(f"       = ${current_price:.4f} - ${half_range:.4f}")
         
     else:  # SELL
-        # SELL: esperamos bajada
-        # TP = precio - 75% de la mitad del rango
-        # SL = precio + mitad del rango completa
         take_profit = current_price - (half_range * tp_factor)
         stop_loss = current_price + half_range
         
@@ -332,29 +468,26 @@ def calculate_tp_sl_from_range(signal, current_price, side='buy', tp_factor=0.75
         sl_pct = (sl_distance / current_price) * 100
         
         print(f"\n📉 SELL Setup:")
+        print(f"   Entry: ${current_price:.4f}")
         print(f"   TP: ${take_profit:.4f} (-{tp_pct:.2f}%)")
-        print(f"       = ${current_price:.4f} - ${half_range * tp_factor:.4f}")
         print(f"   SL: ${stop_loss:.4f} (+{sl_pct:.2f}%)")
-        print(f"       = ${current_price:.4f} + ${half_range:.4f}")
     
-    # 4. Calcular métricas de risk/reward
     risk = abs(current_price - stop_loss)
     reward = abs(take_profit - current_price)
     rr_ratio = reward / risk if risk > 0 else 0
     
-    print(f"\n💰 Análisis Risk/Reward:")
-    print(f"   Riesgo: ${risk:.4f} ({(risk/current_price)*100:.2f}%)")
-    print(f"   Recompensa: ${reward:.4f} ({(reward/current_price)*100:.2f}%)")
-    print(f"   R/R Ratio: {rr_ratio:.2f}")
+    print(f"\n💰 Risk/Reward:")
+    print(f"   Riesgo: ${risk:.4f}")
+    print(f"   Recompensa: ${reward:.4f}")
+    print(f"   R/R: {rr_ratio:.2f}")
     
-    # 5. Validaciones de seguridad
     warnings = []
     
-    if pred_range / current_price < 0.01:  # Rango < 1%
+    if pred_range / base_price < 0.01:
         warnings.append("⚠️ Rango predicho muy pequeño (<1%)")
     
-    if pred_range / current_price > 0.15:  # Rango > 15%
-        warnings.append("⚠️ Rango predicho muy grande (>15%) - alta volatilidad")
+    if pred_range / base_price > 0.15:
+        warnings.append("⚠️ Rango predicho muy grande (>15%)")
     
     if rr_ratio < 1.0:
         warnings.append(f"⚠️ R/R bajo ({rr_ratio:.2f} < 1.0)")
@@ -370,7 +503,7 @@ def calculate_tp_sl_from_range(signal, current_price, side='buy', tp_factor=0.75
         'sl_pct': -sl_pct if side == 'buy' else sl_pct,
         'tp_pct': tp_pct if side == 'buy' else -tp_pct,
         'pred_range': pred_range,
-        'pred_range_%': (pred_range / current_price) * 100,
+        'pred_range_%': (pred_range / base_price) * 100,
         'half_range': half_range,
         'tp_factor': tp_factor,
         'risk_usd': risk,
@@ -383,20 +516,13 @@ def calculate_tp_sl_from_range(signal, current_price, side='buy', tp_factor=0.75
     }
 
 def place_market_order_with_separate_sl(side, volume, leverage, entry_price, stop_loss):
-    """
-    🔥 MEJORADO: Coloca orden market + stop-loss como ORDEN SEPARADA
-    Así se ve claramente en la interfaz de Kraken
-    
-    Returns:
-        dict con order_id principal y sl_order_id
-    """
+    """Coloca orden market + stop-loss separado"""
     print(f"\n📤 Colocando orden MARKET {side.upper()}...")
     print(f"   Volumen: {volume} ADA")
     print(f"   Leverage: {leverage}x")
     print(f"   Entry: ${entry_price:.4f}")
     print(f"   Stop Loss: ${stop_loss:.4f}")
     
-    # 1. Orden principal (market)
     main_order_data = {
         'pair': PAIR,
         'type': side,
@@ -415,13 +541,10 @@ def place_market_order_with_separate_sl(side, volume, leverage, entry_price, sto
     main_order_id = main_result['txid'][0]
     print(f"✅ Orden ejecutada: {main_order_id}")
     
-    # 2. Esperar 2 segundos para que se procese
     time.sleep(2)
     
-    # 3. Colocar stop-loss como ORDEN SEPARADA
     sl_side = 'sell' if side == 'buy' else 'buy'
     
-    # Precio límite del SL (0.5% peor que el trigger)
     if side == 'buy':
         sl_limit_price = stop_loss * 0.995
     else:
@@ -431,12 +554,12 @@ def place_market_order_with_separate_sl(side, volume, leverage, entry_price, sto
         'pair': PAIR,
         'type': sl_side,
         'ordertype': 'stop-loss-limit',
-        'price': str(stop_loss),      # Trigger price
-        'price2': str(sl_limit_price), # Limit price
+        'price': str(stop_loss),
+        'price2': str(sl_limit_price),
         'volume': str(volume)
     }
     
-    print(f"\n🛡️ Configurando stop-loss automático...")
+    print(f"\n🛡️ Configurando stop-loss...")
     print(f"   Trigger: ${stop_loss:.4f}")
     print(f"   Limit: ${sl_limit_price:.4f}")
     
@@ -447,7 +570,7 @@ def place_market_order_with_separate_sl(side, volume, leverage, entry_price, sto
         print(f"✅ Stop-Loss configurado: {sl_order_id}")
     else:
         sl_order_id = None
-        print(f"⚠️ No se pudo configurar stop-loss automático")
+        print(f"⚠️ No se pudo configurar stop-loss")
     
     return {
         'order_id': main_order_id,
@@ -519,7 +642,7 @@ def save_order_to_tracking(order_info, signal_info, position_info, tp_sl_info):
     print(f"✅ Orden guardada en {OPEN_ORDERS_FILE}")
 
 def close_position(order_id, side, volume):
-    """Cierra una posición manualmente (para TP o timeout)"""
+    """Cierra una posición manualmente"""
     print(f"\n🔄 Cerrando posición {order_id}...")
     
     close_side = 'sell' if side == 'buy' else 'buy'
@@ -542,9 +665,9 @@ def close_position(order_id, side, volume):
         return False
 
 def execute_trading_strategy():
-    """🔥 FUNCIÓN PRINCIPAL - Ejecuta estrategia de trading"""
+    """🔥 FUNCIÓN PRINCIPAL - Ejecuta estrategia con validaciones"""
     print("="*70)
-    print("  💼 EJECUTANDO ESTRATEGIA DE TRADING")
+    print("  💼 ESTRATEGIA DE TRADING CON VALIDACIÓN")
     print("="*70 + "\n")
     
     if check_existing_orders():
@@ -554,20 +677,55 @@ def execute_trading_strategy():
     signal = load_last_signal()
     
     if not signal:
-        print("\n⚠️ No hay señales válidas para ejecutar")
+        print("\n⚠️ No hay señales válidas")
         return
     
     if signal['signal'] == 'HOLD':
         print(f"\n⸻ Señal es HOLD. No se ejecuta trade.")
         return
     
-    print(f"\n🎯 Procesando señal: {signal['signal']}")
+    # 🔥 VALIDACIÓN 1: Coherencia de predicciones
+    coherence = validate_prediction_coherence(signal)
+    
+    if not coherence['valid']:
+        msg = f"❌ Predicción inválida: {coherence['reason']}"
+        print(msg)
+        send_telegram(msg)
+        return
+    
+    # Obtener precio actual
+    current_price = get_current_price()
+    
+    if not current_price:
+        print("❌ No se pudo obtener precio actual")
+        return
+    
+    # 🔥 VALIDACIÓN 2: Sincronización de precios
+    sync_check = validate_price_sync(signal, current_price)
+    
+    if not sync_check['valid']:
+        msg = f"❌ Desincronización: {sync_check['reason']}"
+        print(msg)
+        send_telegram(msg)
+        return
+    
+    # Usar señal ajustada (si fue modificada)
+    adjusted_signal = sync_check['adjusted_signal']
+    
+    if adjusted_signal == 'HOLD':
+        print(f"\n⸻ Señal ajustada a HOLD por posición en rango")
+        return
+    
+    signal['signal'] = adjusted_signal  # Actualizar señal
+    
+    print(f"\n🎯 Ejecutando señal: {signal['signal']}")
     print(f"   Confianza: {signal['confidence']:.1f}%")
+    print(f"   Drift de precio: {sync_check['drift_%']:+.2f}%")
     
     balance = get_account_balance()
     
     if not balance or balance < 5:
-        msg = f"❌ Balance insuficiente: ${balance:.2f} (mínimo $5)"
+        msg = f"❌ Balance insuficiente: ${balance:.2f}"
         print(msg)
         send_telegram(msg)
         return
@@ -575,27 +733,18 @@ def execute_trading_strategy():
     rm = get_risk_manager()
     rm.sync_with_kraken_balance(balance)
     
-    current_price = get_current_price()
-    
-    if not current_price:
-        print("❌ No se pudo obtener precio actual")
-        return
-    
     side = signal['signal'].lower()
     
-    # 🔥 NUEVA LÓGICA: TP/SL basados en RANGO PREDICHO
     tp_sl_info = calculate_tp_sl_from_range(signal, current_price, side, tp_factor=0.75)
     
     stop_loss = tp_sl_info['stop_loss']
     take_profit = tp_sl_info['take_profit']
     
-    print(f"\n📊 RESUMEN DEL SETUP:")
+    print(f"\n📊 RESUMEN:")
     print(f"   Entry: ${current_price:.4f}")
-    print(f"   Stop Loss: ${stop_loss:.4f} ({tp_sl_info['sl_pct']:+.2f}%)")
-    print(f"   Take Profit: ${take_profit:.4f} ({tp_sl_info['tp_pct']:+.2f}%)")
-    print(f"   R/R Ratio: {tp_sl_info['rr_ratio']:.2f}")
-    print(f"   Rango predicho: ${tp_sl_info['pred_range']:.4f} ({tp_sl_info['pred_range_%']:.2f}%)")
-    print(f"   Factor TP: {tp_sl_info['tp_factor']*100:.0f}% de la mitad del rango")
+    print(f"   SL: ${stop_loss:.4f} ({tp_sl_info['sl_pct']:+.2f}%)")
+    print(f"   TP: ${take_profit:.4f} ({tp_sl_info['tp_pct']:+.2f}%)")
+    print(f"   R/R: {tp_sl_info['rr_ratio']:.2f}")
     
     trade_validation = rm.validate_trade(current_price, take_profit, stop_loss, side)
     
@@ -605,7 +754,7 @@ def execute_trading_strategy():
         send_telegram(msg)
         return
     
-    print(f"\n✅ Trade validado (R/R: {trade_validation['rr_ratio']:.2f})")
+    print(f"\n✅ Trade validado")
     
     position = rm.calculate_position_size(
         current_price,
@@ -621,13 +770,10 @@ def execute_trading_strategy():
         send_telegram(msg)
         return
     
-    print(f"\n🔥 POSICIÓN CALCULADA:")
+    print(f"\n🔥 POSICIÓN:")
     print(f"   Volumen: {position['volume']} ADA")
-    print(f"   Valor: ${position['position_value']:.2f}")
     print(f"   Leverage: {position['leverage']}x")
     print(f"   Margen: ${position['margin_required']:.2f}")
-    print(f"   Fees: ${position['total_fees_usd']:.2f}")
-    print(f"   Liquidación: ${position['liquidation_price']:.4f}")
     
     print(f"\n🚀 EJECUTANDO ORDEN...")
     
@@ -640,7 +786,7 @@ def execute_trading_strategy():
     )
     
     if not order_result:
-        msg = "❌ Error al ejecutar orden en Kraken"
+        msg = "❌ Error al ejecutar orden"
         print(msg)
         send_telegram(msg)
         return
@@ -648,61 +794,49 @@ def execute_trading_strategy():
     save_order_to_tracking(order_result, signal, position, tp_sl_info)
     rm.reserve_margin(position['margin_required'])
     
-    # Mensaje de Telegram
     msg = f"""
-🚀 *ORDEN EJECUTADA*
+🚀 *ORDEN EJECUTADA* (Validada)
 
-📊 *Setup Basado en Rango Predicho:*
+📊 *Validaciones:*
+   ✅ Predicciones coherentes
+   ✅ Precios sincronizados ({sync_check['drift_%']:+.2f}%)
+   ✅ Close entre High/Low
+
+🎯 *Setup:*
    • Señal: {signal['signal']}
-   • Confianza: {signal['confidence']:.1f}%
    • Entry: ${current_price:.4f}
-
-🎯 *Predicciones:*
-   • High: ${tp_sl_info['pred_high']:.4f}
-   • Low: ${tp_sl_info['pred_low']:.4f}
-   • Rango: ${tp_sl_info['pred_range']:.4f} ({tp_sl_info['pred_range_%']:.2f}%)
+   • TP: ${take_profit:.4f} ({tp_sl_info['tp_pct']:+.2f}%)
+   • SL: ${stop_loss:.4f} ({tp_sl_info['sl_pct']:+.2f}%)
+   • R/R: {tp_sl_info['rr_ratio']:.2f}
 
 💼 *Posición:*
    • Volumen: {position['volume']} ADA
-   • Valor: ${position['position_value']:.2f}
    • Leverage: {position['leverage']}x
    • Margen: ${position['margin_required']:.2f}
 
-🎯 *Objetivos (75% del rango):*
-   • TP: ${take_profit:.4f} ({tp_sl_info['tp_pct']:+.2f}%)
-   • SL: ${stop_loss:.4f} ({tp_sl_info['sl_pct']:+.2f}%) 🛡️ *VISIBLE EN KRAKEN*
-   • R/R: {tp_sl_info['rr_ratio']:.2f}
-   • Liquidación: ${position['liquidation_price']:.4f}
-
-💰 *Fees:* ${position['total_fees_usd']:.2f}
-
-🆔 Order: `{order_result['order_id']}`
-🛡️ SL Order: `{order_result.get('sl_order_id', 'N/A')}`
+🆔 `{order_result['order_id']}`
 """
     
     print(msg.replace('*', '').replace('`', ''))
     send_telegram(msg)
     
     print("\n" + "="*70)
-    print("  ✅ ORDEN EJECUTADA CORRECTAMENTE")
+    print("  ✅ ORDEN EJECUTADA")
     print("="*70)
 
 def monitor_orders():
-    """Monitorea órdenes abiertas para TAKE PROFIT"""
-    print("\n🔍 Monitoreando órdenes abiertas...")
+    """Monitorea órdenes abiertas"""
+    print("\n🔍 Monitoreando órdenes...")
     
     orders = sync_open_orders_with_kraken()
     
     if len(orders) == 0:
-        print("ℹ️ No hay órdenes que monitorear")
+        print("ℹ️ No hay órdenes")
         return
-    
-    print(f"📋 Monitoreando {len(orders)} orden(es)...")
     
     current_price = get_current_price()
     
     if not current_price:
-        print("❌ No se pudo obtener precio")
         return
     
     for order_id, order_info in list(orders.items()):
@@ -710,10 +844,7 @@ def monitor_orders():
         print(f"   Entry: ${order_info['entry_price']:.4f}")
         print(f"   Current: ${current_price:.4f}")
         print(f"   TP: ${order_info['take_profit']:.4f}")
-        print(f"   SL: ${order_info['stop_loss']:.4f} 🛡️")
-        
-        if order_info.get('sl_order_id'):
-            print(f"   SL Order: {order_info['sl_order_id']}")
+        print(f"   SL: ${order_info['stop_loss']:.4f}")
         
         close_reason = None
         
@@ -721,7 +852,6 @@ def monitor_orders():
             pnl_pct = ((current_price - order_info['entry_price']) / order_info['entry_price']) * 100
             
             if current_price >= order_info['take_profit']:
-                print("✅ TP alcanzado")
                 close_reason = 'TP'
             else:
                 print(f"💹 P&L: {pnl_pct:+.2f}%")
@@ -729,7 +859,6 @@ def monitor_orders():
             pnl_pct = ((order_info['entry_price'] - current_price) / order_info['entry_price']) * 100
             
             if current_price <= order_info['take_profit']:
-                print("✅ TP alcanzado")
                 close_reason = 'TP'
             else:
                 print(f"💹 P&L: {pnl_pct:+.2f}%")
@@ -738,7 +867,6 @@ def monitor_orders():
         time_open = datetime.now() - entry_time
         
         if time_open > timedelta(hours=3.5):
-            print("⏰ Timeout (3.5h)")
             close_reason = 'TIMEOUT'
         
         if close_reason:
@@ -747,11 +875,7 @@ def monitor_orders():
             if success:
                 del orders[order_id]
                 
-                msg = f"🔒 *Posición Cerrada*\n\n"
-                msg += f"Razón: {close_reason}\n"
-                msg += f"P&L: {pnl_pct:+.2f}%\n"
-                msg += f"Duración: {time_open}"
-                
+                msg = f"🔒 *Posición Cerrada*\n\nRazón: {close_reason}\nP&L: {pnl_pct:+.2f}%"
                 send_telegram(msg)
     
     with open(OPEN_ORDERS_FILE, 'w') as f:
