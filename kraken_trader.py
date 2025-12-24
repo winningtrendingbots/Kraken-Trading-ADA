@@ -1,9 +1,10 @@
 """
-KRAKEN TRADER - VERSIÓN CON TP/SL DINÁMICOS CORREGIDOS
+KRAKEN TRADER - VERSIÓN CON TP/SL BASADOS EN RANGO PREDICHO
 
-✅ TP/SL basados en % de movimiento predicho (no distancia absoluta)
+✅ TP/SL basados en el RANGO predicho (pred_high - pred_low)
+✅ Cálculo desde precio REAL actual (no histórico)
+✅ TP al 75% del movimiento esperado (conservador)
 ✅ Stop-loss visible en Kraken como orden separada
-✅ Take-profit monitoreado automáticamente
 ✅ Sincronización con estado real de Kraken
 """
 
@@ -256,92 +257,129 @@ def check_existing_orders():
     
     return False
 
-def calculate_dynamic_tp_sl(signal, current_price, side='buy', tp_factor=0.70):
+def calculate_tp_sl_from_range(signal, current_price, side='buy', tp_factor=0.75):
     """
-    🔥 NUEVA FUNCIÓN: Calcula TP/SL dinámicos correctamente
+    🔥 NUEVA LÓGICA: TP/SL basados en el RANGO PREDICHO
+    
+    Funcionamiento:
+    1. Calcula rango predicho: pred_high - pred_low
+    2. Divide el rango por 2 (conservador)
+    3. Para BUY:
+       - TP = precio_actual + (mitad_rango * 0.75)  ← 75% del movimiento esperado
+       - SL = precio_actual - mitad_rango
+    4. Para SELL:
+       - TP = precio_actual - (mitad_rango * 0.75)
+       - SL = precio_actual + mitad_rango
     
     Args:
-        signal: Diccionario con la señal (contiene pred_high, pred_low, current_price de predicción)
-        current_price: Precio ACTUAL al momento de ejecutar
+        signal: Dict con pred_high, pred_low, pred_close, current_price
+        current_price: Precio REAL actual al ejecutar (no histórico)
         side: 'buy' o 'sell'
-        tp_factor: Factor conservador (0.70 = 70% del movimiento predicho)
+        tp_factor: Factor conservador para TP (0.75 = 75%)
     
     Returns:
-        dict con stop_loss, take_profit y detalles
+        dict con stop_loss, take_profit y métricas
     """
-    # Precio cuando se hizo la predicción
-    pred_base_price = signal['current_price']
     
-    print(f"\n🎯 CÁLCULO DINÁMICO DE TP/SL:")
-    print(f"   Precio predicción: ${pred_base_price:.4f}")
-    print(f"   Precio actual: ${current_price:.4f}")
-    print(f"   Diferencia: {((current_price - pred_base_price) / pred_base_price * 100):+.2f}%")
+    # 1. Obtener predicciones
+    pred_high = signal.get('pred_high', current_price * 1.03)
+    pred_low = signal.get('pred_low', current_price * 0.97)
+    pred_close = signal.get('pred_close', current_price)
     
+    # 2. Calcular rango predicho y su mitad
+    pred_range = pred_high - pred_low
+    half_range = pred_range / 2
+    
+    print(f"\n🎯 CÁLCULO TP/SL BASADO EN RANGO PREDICHO:")
+    print(f"   Precio actual (REAL): ${current_price:.4f}")
+    print(f"   Pred High: ${pred_high:.4f}")
+    print(f"   Pred Low: ${pred_low:.4f}")
+    print(f"   Pred Close: ${pred_close:.4f}")
+    print(f"   Rango predicho: ${pred_range:.4f} ({(pred_range/current_price)*100:.2f}%)")
+    print(f"   Mitad del rango: ${half_range:.4f}")
+    
+    # 3. Calcular TP y SL según dirección
     if side == 'buy':
-        # 1. Calcular % de movimiento alcista predicho
-        pred_high = signal.get('pred_high', pred_base_price * 1.03)
-        pred_move_pct = (pred_high - pred_base_price) / pred_base_price
+        # BUY: esperamos subida
+        # TP = precio + 75% de la mitad del rango
+        # SL = precio - mitad del rango completa
+        take_profit = current_price + (half_range * tp_factor)
+        stop_loss = current_price - half_range
+        
+        tp_distance = take_profit - current_price
+        sl_distance = current_price - stop_loss
+        
+        tp_pct = (tp_distance / current_price) * 100
+        sl_pct = (sl_distance / current_price) * 100
         
         print(f"\n📈 BUY Setup:")
-        print(f"   High predicho: ${pred_high:.4f}")
-        print(f"   Movimiento predicho: +{pred_move_pct * 100:.2f}%")
-        
-        # 2. Aplicar el % al precio actual (ajuste dinámico)
-        adjusted_high = current_price * (1 + pred_move_pct)
-        print(f"   High ajustado al precio actual: ${adjusted_high:.4f}")
-        
-        # 3. TP = 70% del movimiento predicho ajustado
-        take_profit = current_price * (1 + pred_move_pct * tp_factor)
-        tp_pct = ((take_profit - current_price) / current_price) * 100
-        
-        # 4. SL = -2% fijo (configurable)
-        stop_loss = current_price * 0.98
-        sl_pct = -2.0
-        
-        print(f"   ✅ Take Profit: ${take_profit:.4f} (+{tp_pct:.2f}%)")
-        print(f"   ✅ Stop Loss: ${stop_loss:.4f} ({sl_pct:.2f}%)")
+        print(f"   TP: ${take_profit:.4f} (+{tp_pct:.2f}%)")
+        print(f"       = ${current_price:.4f} + ${half_range * tp_factor:.4f}")
+        print(f"   SL: ${stop_loss:.4f} (-{sl_pct:.2f}%)")
+        print(f"       = ${current_price:.4f} - ${half_range:.4f}")
         
     else:  # SELL
-        # 1. Calcular % de movimiento bajista predicho
-        pred_low = signal.get('pred_low', pred_base_price * 0.97)
-        pred_move_pct = (pred_base_price - pred_low) / pred_base_price
+        # SELL: esperamos bajada
+        # TP = precio - 75% de la mitad del rango
+        # SL = precio + mitad del rango completa
+        take_profit = current_price - (half_range * tp_factor)
+        stop_loss = current_price + half_range
+        
+        tp_distance = current_price - take_profit
+        sl_distance = stop_loss - current_price
+        
+        tp_pct = (tp_distance / current_price) * 100
+        sl_pct = (sl_distance / current_price) * 100
         
         print(f"\n📉 SELL Setup:")
-        print(f"   Low predicho: ${pred_low:.4f}")
-        print(f"   Movimiento predicho: -{pred_move_pct * 100:.2f}%")
-        
-        # 2. Aplicar el % al precio actual
-        adjusted_low = current_price * (1 - pred_move_pct)
-        print(f"   Low ajustado al precio actual: ${adjusted_low:.4f}")
-        
-        # 3. TP = 70% del movimiento predicho ajustado
-        take_profit = current_price * (1 - pred_move_pct * tp_factor)
-        tp_pct = ((current_price - take_profit) / current_price) * 100
-        
-        # 4. SL = +2% fijo
-        stop_loss = current_price * 1.02
-        sl_pct = 2.0
-        
-        print(f"   ✅ Take Profit: ${take_profit:.4f} (-{tp_pct:.2f}%)")
-        print(f"   ✅ Stop Loss: ${stop_loss:.4f} (+{sl_pct:.2f}%)")
+        print(f"   TP: ${take_profit:.4f} (-{tp_pct:.2f}%)")
+        print(f"       = ${current_price:.4f} - ${half_range * tp_factor:.4f}")
+        print(f"   SL: ${stop_loss:.4f} (+{sl_pct:.2f}%)")
+        print(f"       = ${current_price:.4f} + ${half_range:.4f}")
     
-    # 5. Calcular R/R ratio
+    # 4. Calcular métricas de risk/reward
     risk = abs(current_price - stop_loss)
     reward = abs(take_profit - current_price)
     rr_ratio = reward / risk if risk > 0 else 0
     
+    print(f"\n💰 Análisis Risk/Reward:")
+    print(f"   Riesgo: ${risk:.4f} ({(risk/current_price)*100:.2f}%)")
+    print(f"   Recompensa: ${reward:.4f} ({(reward/current_price)*100:.2f}%)")
+    print(f"   R/R Ratio: {rr_ratio:.2f}")
+    
+    # 5. Validaciones de seguridad
+    warnings = []
+    
+    if pred_range / current_price < 0.01:  # Rango < 1%
+        warnings.append("⚠️ Rango predicho muy pequeño (<1%)")
+    
+    if pred_range / current_price > 0.15:  # Rango > 15%
+        warnings.append("⚠️ Rango predicho muy grande (>15%) - alta volatilidad")
+    
+    if rr_ratio < 1.0:
+        warnings.append(f"⚠️ R/R bajo ({rr_ratio:.2f} < 1.0)")
+    
+    if warnings:
+        print(f"\n⚠️ Advertencias:")
+        for w in warnings:
+            print(f"   {w}")
+    
     return {
         'stop_loss': round(stop_loss, 4),
         'take_profit': round(take_profit, 4),
-        'sl_pct': sl_pct,
+        'sl_pct': -sl_pct if side == 'buy' else sl_pct,
         'tp_pct': tp_pct if side == 'buy' else -tp_pct,
-        'pred_move_pct': pred_move_pct * 100,
+        'pred_range': pred_range,
+        'pred_range_%': (pred_range / current_price) * 100,
+        'half_range': half_range,
         'tp_factor': tp_factor,
         'risk_usd': risk,
         'reward_usd': reward,
         'rr_ratio': rr_ratio,
-        'pred_high': signal.get('pred_high', 0) if side == 'buy' else None,
-        'pred_low': signal.get('pred_low', 0) if side == 'sell' else None
+        'pred_high': pred_high,
+        'pred_low': pred_low,
+        'pred_close': pred_close,
+        'warnings': warnings
     }
 
 def place_market_order_with_separate_sl(side, volume, leverage, entry_price, stop_loss):
@@ -439,7 +477,8 @@ def save_order_to_tracking(order_info, signal_info, position_info, tp_sl_info):
         'liquidation_price': position_info['liquidation_price'],
         'expected_risk': position_info['risk_amount'],
         'has_auto_sl': order_info.get('has_auto_sl', False),
-        'rr_ratio': tp_sl_info['rr_ratio']
+        'rr_ratio': tp_sl_info['rr_ratio'],
+        'pred_range_%': tp_sl_info.get('pred_range_%', 0)
     }
     
     df_order = pd.DataFrame([order_data])
@@ -509,7 +548,7 @@ def execute_trading_strategy():
     print("="*70 + "\n")
     
     if check_existing_orders():
-        print("\n⏸️ Ya hay posiciones abiertas. Saltando ejecución.")
+        print("\n⸻ Ya hay posiciones abiertas. Saltando ejecución.")
         return
     
     signal = load_last_signal()
@@ -519,7 +558,7 @@ def execute_trading_strategy():
         return
     
     if signal['signal'] == 'HOLD':
-        print(f"\n⏸️ Señal es HOLD. No se ejecuta trade.")
+        print(f"\n⸻ Señal es HOLD. No se ejecuta trade.")
         return
     
     print(f"\n🎯 Procesando señal: {signal['signal']}")
@@ -544,8 +583,8 @@ def execute_trading_strategy():
     
     side = signal['signal'].lower()
     
-    # 🔥 CALCULAR TP/SL DINÁMICOS CORRECTAMENTE
-    tp_sl_info = calculate_dynamic_tp_sl(signal, current_price, side, tp_factor=0.70)
+    # 🔥 NUEVA LÓGICA: TP/SL basados en RANGO PREDICHO
+    tp_sl_info = calculate_tp_sl_from_range(signal, current_price, side, tp_factor=0.75)
     
     stop_loss = tp_sl_info['stop_loss']
     take_profit = tp_sl_info['take_profit']
@@ -555,8 +594,8 @@ def execute_trading_strategy():
     print(f"   Stop Loss: ${stop_loss:.4f} ({tp_sl_info['sl_pct']:+.2f}%)")
     print(f"   Take Profit: ${take_profit:.4f} ({tp_sl_info['tp_pct']:+.2f}%)")
     print(f"   R/R Ratio: {tp_sl_info['rr_ratio']:.2f}")
-    print(f"   Movimiento predicho: {tp_sl_info['pred_move_pct']:+.2f}%")
-    print(f"   Factor TP: {tp_sl_info['tp_factor']*100:.0f}% del movimiento predicho")
+    print(f"   Rango predicho: ${tp_sl_info['pred_range']:.4f} ({tp_sl_info['pred_range_%']:.2f}%)")
+    print(f"   Factor TP: {tp_sl_info['tp_factor']*100:.0f}% de la mitad del rango")
     
     trade_validation = rm.validate_trade(current_price, take_profit, stop_loss, side)
     
@@ -610,24 +649,18 @@ def execute_trading_strategy():
     rm.reserve_margin(position['margin_required'])
     
     # Mensaje de Telegram
-    pred_info = ""
-    if side == 'buy':
-        pred_high = tp_sl_info.get('pred_high', 0)
-        if pred_high:
-            pred_info = f"\n📈 *Predicción:* ${pred_high:.4f} (+{tp_sl_info['pred_move_pct']:.2f}%)"
-    else:
-        pred_low = tp_sl_info.get('pred_low', 0)
-        if pred_low:
-            pred_info = f"\n📉 *Predicción:* ${pred_low:.4f} (-{tp_sl_info['pred_move_pct']:.2f}%)"
-    
     msg = f"""
 🚀 *ORDEN EJECUTADA*
 
-📊 *Setup:*
+📊 *Setup Basado en Rango Predicho:*
    • Señal: {signal['signal']}
    • Confianza: {signal['confidence']:.1f}%
    • Entry: ${current_price:.4f}
-{pred_info}
+
+🎯 *Predicciones:*
+   • High: ${tp_sl_info['pred_high']:.4f}
+   • Low: ${tp_sl_info['pred_low']:.4f}
+   • Rango: ${tp_sl_info['pred_range']:.4f} ({tp_sl_info['pred_range_%']:.2f}%)
 
 💼 *Posición:*
    • Volumen: {position['volume']} ADA
@@ -635,8 +668,8 @@ def execute_trading_strategy():
    • Leverage: {position['leverage']}x
    • Margen: ${position['margin_required']:.2f}
 
-🎯 *Objetivos:*
-   • TP: ${take_profit:.4f} ({tp_sl_info['tp_pct']:+.2f}% - {tp_sl_info['tp_factor']*100:.0f}% del pred)
+🎯 *Objetivos (75% del rango):*
+   • TP: ${take_profit:.4f} ({tp_sl_info['tp_pct']:+.2f}%)
    • SL: ${stop_loss:.4f} ({tp_sl_info['sl_pct']:+.2f}%) 🛡️ *VISIBLE EN KRAKEN*
    • R/R: {tp_sl_info['rr_ratio']:.2f}
    • Liquidación: ${position['liquidation_price']:.4f}
