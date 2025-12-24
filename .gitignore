@@ -30,7 +30,6 @@ Thumbs.db
 # ============================================
 # ✅ ARCHIVOS DEL MODELO - NO IGNORAR
 # ============================================
-# Permitir explícitamente archivos del modelo
 !ADAUSD_MODELS/
 !ADAUSD_MODELS/*.pth
 !ADAUSD_MODELS/*.pkl
@@ -42,5 +41,24 @@ Thumbs.db
 !risk_config.json
 !prediction_tracker.csv
 
-# Ignorar OTROS archivos de Python
-# pero NO los del modelo
+# ============================================
+# ✅ WORKFLOWS - SIEMPRE INCLUIR
+# ============================================
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+
+# ============================================
+# ✅ SCRIPTS DE TRADING - NO IGNORAR
+# ============================================
+!*.py
+!requirements.txt
+!README.md
+
+# ============================================
+# ✅ DATOS DE TRADING - NO IGNORAR
+# ============================================
+!trading_signals.csv
+!orders_executed.csv
+!kraken_trades.csv
+!open_orders.json
