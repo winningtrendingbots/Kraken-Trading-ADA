@@ -264,33 +264,33 @@ jobs:
           if [ -f "prediction_tracker.csv" ]; then
             echo "📈 Estadísticas de predicciones:"
             python3 << 'PYEOF'
-import pandas as pd
-try:
-    df = pd.read_csv('prediction_tracker.csv')
-    total = len(df)
-    evaluated = df['actual_close'].notna().sum()
-    
-    print(f"  Total predicciones: {total}")
-    print(f"  Evaluadas: {evaluated}")
-    
-    if evaluated > 0:
-        avg_accuracy = df[df['actual_close'].notna()]['pred_accuracy_%'].mean()
-        print(f"  Accuracy promedio: {avg_accuracy:.2f}%")
-    
-    # Contar señales por tipo
-    buy_count = (df['signal'] == 'BUY').sum()
-    sell_count = (df['signal'] == 'SELL').sum()
-    hold_count = (df['signal'] == 'HOLD').sum()
-    
-    print(f"\n  Señales generadas:")
-    print(f"    BUY: {buy_count}")
-    print(f"    SELL: {sell_count}")
-    print(f"    HOLD: {hold_count}")
-    
-except Exception as e:
-    print(f"  Error: {e}")
-PYEOF
-          fi
+            import pandas as pd
+            try:
+                df = pd.read_csv('prediction_tracker.csv')
+                total = len(df)
+                evaluated = df['actual_close'].notna().sum()
+                
+                print(f"  Total predicciones: {total}")
+                print(f"  Evaluadas: {evaluated}")
+                
+                if evaluated > 0:
+                    avg_accuracy = df[df['actual_close'].notna()]['pred_accuracy_%'].mean()
+                    print(f"  Accuracy promedio: {avg_accuracy:.2f}%")
+                
+                # Contar señales por tipo
+                buy_count = (df['signal'] == 'BUY').sum()
+                sell_count = (df['signal'] == 'SELL').sum()
+                hold_count = (df['signal'] == 'HOLD').sum()
+                
+                print(f"\n  Señales generadas:")
+                print(f"    BUY: {buy_count}")
+                print(f"    SELL: {sell_count}")
+                print(f"    HOLD: {hold_count}")
+                
+            except Exception as e:
+                print(f"  Error: {e}")
+            PYEOF
+                      fi
           
           echo ""
           echo "🕐 Próxima ejecución: En 5 minutos"
