@@ -354,23 +354,23 @@ jobs:
           if [ -f "prediction_tracker.csv" ]; then
             echo "📈 Estadísticas de predicciones:"
             python3 << 'PYEOF'
-import pandas as pd
-try:
-    df = pd.read_csv('prediction_tracker.csv')
-    total = len(df)
-    evaluated = df['actual_close'].notna().sum()
-    
-    print(f"  Total predicciones: {total}")
-    print(f"  Evaluadas: {evaluated}")
-    
-    if evaluated > 0:
-        avg_accuracy = df[df['actual_close'].notna()]['pred_accuracy_%'].mean()
-        print(f"  Accuracy promedio: {avg_accuracy:.2f}%")
-except:
-    pass
-PYEOF
-          fi
-          
-          echo ""
-          echo "🕐 Próxima ejecución: En 15 minutos"
-          echo ""
+          import pandas as pd
+          try:
+              df = pd.read_csv('prediction_tracker.csv')
+              total = len(df)
+              evaluated = df['actual_close'].notna().sum()
+              
+              print(f"  Total predicciones: {total}")
+              print(f"  Evaluadas: {evaluated}")
+              
+              if evaluated > 0:
+                  avg_accuracy = df[df['actual_close'].notna()]['pred_accuracy_%'].mean()
+                  print(f"  Accuracy promedio: {avg_accuracy:.2f}%")
+          except:
+              pass
+          PYEOF
+                    fi
+                    
+                    echo ""
+                    echo "🕐 Próxima ejecución: En 15 minutos"
+                    echo ""
