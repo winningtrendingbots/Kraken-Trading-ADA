@@ -226,19 +226,18 @@ def place_margin_order_with_sl(side, volume, leverage, entry_price, stop_loss):
     else:
         sl_limit_price = stop_loss * 1.005
     
-    # Orden principal
+   # Orden principal
     order_data = {
         'pair': PAIR,
         'type': side,
         'ordertype': 'market',
         'volume': str(volume),
         'leverage': str(leverage),
-        'oflags': 'post',  # Maker fee
-        # 🔥 STOP-LOSS automático adjunto
+        #'oflags': 'post',  # ❌ ESTA LÍNEA CAUSA EL ERROR
         'close': json.dumps({
             'ordertype': 'stop-loss-limit',
-            'price': str(stop_loss),        # Trigger
-            'price2': str(sl_limit_price)   # Límite
+            'price': str(stop_loss),
+            'price2': str(sl_limit_price)
         })
     }
     
