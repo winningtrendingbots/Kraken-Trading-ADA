@@ -2,7 +2,7 @@ name: 👀 Monitor Orders
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Cada 5 minutos (ajustado de 4 a 5)
+    - cron: '*/5 * * * *'  # Cada 5 minutos
   workflow_dispatch:
 
 permissions:
@@ -24,18 +24,27 @@ jobs:
           
           # Verificar open_orders.json
           if [ -f "open_orders.json" ]; then
-            # Contar órdenes (excluir {} vacío)
-            order_count=$(cat open_orders.json | python3 -c "import sys, json; data=json.load(sys.stdin); print(len(data))" 2>/dev/null || echo "0")
+            # Contar órdenes usando Python
+            order_count=$(python3 << 'PYEOF'
+import json
+try:
+    with open('open_orders.json', 'r') as f:
+        data = json.load(f)
+    print(len(data))
+except:
+    print(0)
+PYEOF
+)
             
             if [ "$order_count" -gt 0 ]; then
               echo "📊 Órdenes abiertas: $order_count"
               echo "has_orders=true" >> $GITHUB_OUTPUT
             else
-              echo "📭 No hay órdenes abiertas"
+              echo "🔭 No hay órdenes abiertas"
               echo "has_orders=false" >> $GITHUB_OUTPUT
             fi
           else
-            echo "📭 Archivo open_orders.json no existe"
+            echo "🔭 Archivo open_orders.json no existe"
             echo "has_orders=false" >> $GITHUB_OUTPUT
           fi
           
@@ -68,22 +77,8 @@ jobs:
         run: |
           echo "👀 Monitoreando órdenes abiertas..."
           
-          # Crear script de monitoreo dedicado
-          cat > monitor_only.py << 'EOF'
-import sys
-sys.path.insert(0, '.')
-
-try:
-    from kraken_trader import monitor_orders
-    print("🔍 Ejecutando monitoreo de órdenes...")
-    monitor_orders()
-    print("✅ Monitoreo completado")
-except Exception as e:
-    print(f"❌ Error en monitoreo: {e}")
-    raise
-EOF
-          
-          python monitor_only.py
+          # Ejecutar script de monitoreo
+          python monitor_orders.py
       
       - name: 💾 Save changes
         if: steps.check.outputs.has_orders == 'true'
@@ -109,7 +104,7 @@ EOF
         if: always()
         run: |
           echo ""
-          echo "════════════════════════════════════"
+          echo "╔═══════════════════════════════════╗"
           if [ "${{ steps.check.outputs.has_orders }}" = "true" ]; then
             echo "✅ Monitoreo ejecutado"
             echo "   - Órdenes verificadas"
@@ -119,4 +114,4 @@ EOF
             echo "⏳ Sin órdenes activas"
             echo "   - Esperando nuevas señales"
           fi
-          echo "════════════════════════════════════"
+          echo "╚═══════════════════════════════════╝"
