@@ -1,10 +1,10 @@
 """
-KRAKEN TRADER - VERSIÓN HÍBRIDA CON SINCRONIZACIÓN
+KRAKEN TRADER - VERSIÓN CON TP/SL DINÁMICOS CORREGIDOS
 
-✅ Ordenes con STOP-LOSS automático
-✅ Monitoreo manual para TAKE-PROFIT
-✅ Protección total: si el bot falla, el SL te salva
-🆕 Sincronización con estado real de Kraken
+✅ TP/SL basados en % de movimiento predicho (no distancia absoluta)
+✅ Stop-loss visible en Kraken como orden separada
+✅ Take-profit monitoreado automáticamente
+✅ Sincronización con estado real de Kraken
 """
 
 import pandas as pd
@@ -256,82 +256,190 @@ def check_existing_orders():
     
     return False
 
-def place_margin_order_with_sl(side, volume, leverage, entry_price, stop_loss):
+def calculate_dynamic_tp_sl(signal, current_price, side='buy', tp_factor=0.70):
     """
-    🔥 NUEVO: Coloca orden con STOP-LOSS AUTOMÁTICO
+    🔥 NUEVA FUNCIÓN: Calcula TP/SL dinámicos correctamente
     
     Args:
+        signal: Diccionario con la señal (contiene pred_high, pred_low, current_price de predicción)
+        current_price: Precio ACTUAL al momento de ejecutar
         side: 'buy' o 'sell'
-        volume: Cantidad de ADA
-        leverage: Multiplicador (2-5)
-        entry_price: Precio actual (para referencia)
-        stop_loss: Precio del stop loss
+        tp_factor: Factor conservador (0.70 = 70% del movimiento predicho)
     
     Returns:
-        dict con order_id y detalles
+        dict con stop_loss, take_profit y detalles
     """
-    print(f"\n📤 Colocando orden MARGIN {side.upper()} con SL automático...")
+    # Precio cuando se hizo la predicción
+    pred_base_price = signal['current_price']
+    
+    print(f"\n🎯 CÁLCULO DINÁMICO DE TP/SL:")
+    print(f"   Precio predicción: ${pred_base_price:.4f}")
+    print(f"   Precio actual: ${current_price:.4f}")
+    print(f"   Diferencia: {((current_price - pred_base_price) / pred_base_price * 100):+.2f}%")
+    
+    if side == 'buy':
+        # 1. Calcular % de movimiento alcista predicho
+        pred_high = signal.get('pred_high', pred_base_price * 1.03)
+        pred_move_pct = (pred_high - pred_base_price) / pred_base_price
+        
+        print(f"\n📈 BUY Setup:")
+        print(f"   High predicho: ${pred_high:.4f}")
+        print(f"   Movimiento predicho: +{pred_move_pct * 100:.2f}%")
+        
+        # 2. Aplicar el % al precio actual (ajuste dinámico)
+        adjusted_high = current_price * (1 + pred_move_pct)
+        print(f"   High ajustado al precio actual: ${adjusted_high:.4f}")
+        
+        # 3. TP = 70% del movimiento predicho ajustado
+        take_profit = current_price * (1 + pred_move_pct * tp_factor)
+        tp_pct = ((take_profit - current_price) / current_price) * 100
+        
+        # 4. SL = -2% fijo (configurable)
+        stop_loss = current_price * 0.98
+        sl_pct = -2.0
+        
+        print(f"   ✅ Take Profit: ${take_profit:.4f} (+{tp_pct:.2f}%)")
+        print(f"   ✅ Stop Loss: ${stop_loss:.4f} ({sl_pct:.2f}%)")
+        
+    else:  # SELL
+        # 1. Calcular % de movimiento bajista predicho
+        pred_low = signal.get('pred_low', pred_base_price * 0.97)
+        pred_move_pct = (pred_base_price - pred_low) / pred_base_price
+        
+        print(f"\n📉 SELL Setup:")
+        print(f"   Low predicho: ${pred_low:.4f}")
+        print(f"   Movimiento predicho: -{pred_move_pct * 100:.2f}%")
+        
+        # 2. Aplicar el % al precio actual
+        adjusted_low = current_price * (1 - pred_move_pct)
+        print(f"   Low ajustado al precio actual: ${adjusted_low:.4f}")
+        
+        # 3. TP = 70% del movimiento predicho ajustado
+        take_profit = current_price * (1 - pred_move_pct * tp_factor)
+        tp_pct = ((current_price - take_profit) / current_price) * 100
+        
+        # 4. SL = +2% fijo
+        stop_loss = current_price * 1.02
+        sl_pct = 2.0
+        
+        print(f"   ✅ Take Profit: ${take_profit:.4f} (-{tp_pct:.2f}%)")
+        print(f"   ✅ Stop Loss: ${stop_loss:.4f} (+{sl_pct:.2f}%)")
+    
+    # 5. Calcular R/R ratio
+    risk = abs(current_price - stop_loss)
+    reward = abs(take_profit - current_price)
+    rr_ratio = reward / risk if risk > 0 else 0
+    
+    return {
+        'stop_loss': round(stop_loss, 4),
+        'take_profit': round(take_profit, 4),
+        'sl_pct': sl_pct,
+        'tp_pct': tp_pct if side == 'buy' else -tp_pct,
+        'pred_move_pct': pred_move_pct * 100,
+        'tp_factor': tp_factor,
+        'risk_usd': risk,
+        'reward_usd': reward,
+        'rr_ratio': rr_ratio,
+        'pred_high': signal.get('pred_high', 0) if side == 'buy' else None,
+        'pred_low': signal.get('pred_low', 0) if side == 'sell' else None
+    }
+
+def place_market_order_with_separate_sl(side, volume, leverage, entry_price, stop_loss):
+    """
+    🔥 MEJORADO: Coloca orden market + stop-loss como ORDEN SEPARADA
+    Así se ve claramente en la interfaz de Kraken
+    
+    Returns:
+        dict con order_id principal y sl_order_id
+    """
+    print(f"\n📤 Colocando orden MARKET {side.upper()}...")
     print(f"   Volumen: {volume} ADA")
     print(f"   Leverage: {leverage}x")
     print(f"   Entry: ${entry_price:.4f}")
     print(f"   Stop Loss: ${stop_loss:.4f}")
     
-    # Calcular precio límite del SL (5% peor que el trigger)
-    if side == 'buy':
-        sl_limit_price = stop_loss * 0.995  # 0.5% peor
-    else:
-        sl_limit_price = stop_loss * 1.005
-    
-    # Orden principal
-    order_data = {
+    # 1. Orden principal (market)
+    main_order_data = {
         'pair': PAIR,
         'type': side,
         'ordertype': 'market',
         'volume': str(volume),
-        'leverage': str(leverage),
-        'close': json.dumps({
-            'ordertype': 'stop-loss-limit',
-            'price': str(stop_loss),
-            'price2': str(sl_limit_price)
-        })
+        'leverage': str(leverage)
     }
     
-    result = kraken_request('/0/private/AddOrder', order_data)
+    print("\n🚀 Ejecutando orden principal...")
+    main_result = kraken_request('/0/private/AddOrder', main_order_data)
     
-    if not result:
-        print("❌ Error al colocar orden")
+    if not main_result:
+        print("❌ Error al colocar orden principal")
         return None
     
-    order_id = result['txid'][0]
+    main_order_id = main_result['txid'][0]
+    print(f"✅ Orden ejecutada: {main_order_id}")
     
-    print(f"✅ Orden colocada: {order_id}")
-    print(f"🛡️ Stop-Loss automático configurado en ${stop_loss:.4f}")
+    # 2. Esperar 2 segundos para que se procese
+    time.sleep(2)
+    
+    # 3. Colocar stop-loss como ORDEN SEPARADA
+    sl_side = 'sell' if side == 'buy' else 'buy'
+    
+    # Precio límite del SL (0.5% peor que el trigger)
+    if side == 'buy':
+        sl_limit_price = stop_loss * 0.995
+    else:
+        sl_limit_price = stop_loss * 1.005
+    
+    sl_order_data = {
+        'pair': PAIR,
+        'type': sl_side,
+        'ordertype': 'stop-loss-limit',
+        'price': str(stop_loss),      # Trigger price
+        'price2': str(sl_limit_price), # Limit price
+        'volume': str(volume)
+    }
+    
+    print(f"\n🛡️ Configurando stop-loss automático...")
+    print(f"   Trigger: ${stop_loss:.4f}")
+    print(f"   Limit: ${sl_limit_price:.4f}")
+    
+    sl_result = kraken_request('/0/private/AddOrder', sl_order_data)
+    
+    if sl_result:
+        sl_order_id = sl_result['txid'][0]
+        print(f"✅ Stop-Loss configurado: {sl_order_id}")
+    else:
+        sl_order_id = None
+        print(f"⚠️ No se pudo configurar stop-loss automático")
     
     return {
-        'order_id': order_id,
+        'order_id': main_order_id,
+        'sl_order_id': sl_order_id,
         'side': side,
         'volume': volume,
         'leverage': leverage,
-        'has_auto_sl': True,
+        'has_auto_sl': sl_order_id is not None,
         'timestamp': datetime.now().isoformat()
     }
 
-def save_order_to_tracking(order_info, signal_info, position_info):
+def save_order_to_tracking(order_info, signal_info, position_info, tp_sl_info):
     """Guarda orden en archivos de tracking"""
     
     order_data = {
         'timestamp': datetime.now(),
         'order_id': order_info['order_id'],
+        'sl_order_id': order_info.get('sl_order_id', None),
         'side': order_info['side'],
         'volume': order_info['volume'],
         'leverage': order_info['leverage'],
         'entry_price': signal_info['current_price'],
+        'stop_loss': tp_sl_info['stop_loss'],
+        'take_profit': tp_sl_info['take_profit'],
         'confidence': signal_info['confidence'],
         'margin_used': position_info['margin_required'],
         'liquidation_price': position_info['liquidation_price'],
-        'expected_tp': signal_info.get('pred_close', 0),
         'expected_risk': position_info['risk_amount'],
-        'has_auto_sl': order_info.get('has_auto_sl', False)
+        'has_auto_sl': order_info.get('has_auto_sl', False),
+        'rr_ratio': tp_sl_info['rr_ratio']
     }
     
     df_order = pd.DataFrame([order_data])
@@ -345,13 +453,14 @@ def save_order_to_tracking(order_info, signal_info, position_info):
     
     open_order = {
         'order_id': order_info['order_id'],
+        'sl_order_id': order_info.get('sl_order_id', None),
         'side': order_info['side'],
         'volume': order_info['volume'],
         'leverage': order_info['leverage'],
         'entry_price': signal_info['current_price'],
         'entry_time': datetime.now().isoformat(),
-        'stop_loss': signal_info['current_price'] * 0.98 if order_info['side'] == 'buy' else signal_info['current_price'] * 1.02,
-        'take_profit': signal_info.get('pred_close', signal_info['current_price'] * 1.03),
+        'stop_loss': tp_sl_info['stop_loss'],
+        'take_profit': tp_sl_info['take_profit'],
         'margin_used': position_info['margin_required'],
         'liquidation_price': position_info['liquidation_price'],
         'has_auto_sl': order_info.get('has_auto_sl', False)
@@ -371,12 +480,9 @@ def save_order_to_tracking(order_info, signal_info, position_info):
     print(f"✅ Orden guardada en {OPEN_ORDERS_FILE}")
 
 def close_position(order_id, side, volume):
-    """
-    Cierra una posición manualmente (para TP o timeout)
-    """
+    """Cierra una posición manualmente (para TP o timeout)"""
     print(f"\n🔄 Cerrando posición {order_id}...")
     
-    # Para cerrar una posición long, hacemos sell (y viceversa)
     close_side = 'sell' if side == 'buy' else 'buy'
     
     close_data = {
@@ -384,7 +490,7 @@ def close_position(order_id, side, volume):
         'type': close_side,
         'ordertype': 'market',
         'volume': str(volume),
-        'leverage': '0'  # Sin leverage para cerrar
+        'leverage': '0'
     }
     
     result = kraken_request('/0/private/AddOrder', close_data)
@@ -397,9 +503,7 @@ def close_position(order_id, side, volume):
         return False
 
 def execute_trading_strategy():
-    """
-    🔥 FUNCIÓN PRINCIPAL - Ejecuta estrategia de trading
-    """
+    """🔥 FUNCIÓN PRINCIPAL - Ejecuta estrategia de trading"""
     print("="*70)
     print("  💼 EJECUTANDO ESTRATEGIA DE TRADING")
     print("="*70 + "\n")
@@ -440,43 +544,19 @@ def execute_trading_strategy():
     
     side = signal['signal'].lower()
     
-    # 🔥 NUEVO: TP DINÁMICO basado en predicciones del modelo
-    if side == 'buy':
-        stop_loss = current_price * 0.98  # SL fijo al -2%
-        
-        # Usar pred_high del modelo
-        pred_high = signal.get('pred_high', current_price * 1.03)
-        distance_to_high = pred_high - current_price
-        
-        # TP al 70% de la distancia predicha (conservador)
-        take_profit = current_price + (distance_to_high * 0.70)
-        
-        print(f"\n📊 Análisis BUY:")
-        print(f"   Precio actual: ${current_price:.4f}")
-        print(f"   Pred High: ${pred_high:.4f} (+{((pred_high - current_price) / current_price * 100):.2f}%)")
-        print(f"   Distancia a High: ${distance_to_high:.4f}")
-        print(f"   TP (70% dist): ${take_profit:.4f} (+{((take_profit - current_price) / current_price * 100):.2f}%)")
-        
-    else:  # SELL
-        stop_loss = current_price * 1.02  # SL fijo al +2%
-        
-        # Usar pred_low del modelo
-        pred_low = signal.get('pred_low', current_price * 0.97)
-        distance_to_low = current_price - pred_low
-        
-        # TP al 70% de la distancia predicha
-        take_profit = current_price - (distance_to_low * 0.70)
-        
-        print(f"\n📊 Análisis SELL:")
-        print(f"   Precio actual: ${current_price:.4f}")
-        print(f"   Pred Low: ${pred_low:.4f} ({((pred_low - current_price) / current_price * 100):.2f}%)")
-        print(f"   Distancia a Low: ${distance_to_low:.4f}")
-        print(f"   TP (70% dist): ${take_profit:.4f} ({((take_profit - current_price) / current_price * 100):.2f}%)")
+    # 🔥 CALCULAR TP/SL DINÁMICOS CORRECTAMENTE
+    tp_sl_info = calculate_dynamic_tp_sl(signal, current_price, side, tp_factor=0.70)
     
-    print(f"\n📊 Setup del Trade:")
+    stop_loss = tp_sl_info['stop_loss']
+    take_profit = tp_sl_info['take_profit']
+    
+    print(f"\n📊 RESUMEN DEL SETUP:")
     print(f"   Entry: ${current_price:.4f}")
-    print(f"   Stop Loss: ${stop_loss:.4f} (automático)")
-    print(f"   Take Profit: ${take_profit:.4f} (monitoreo manual)")
+    print(f"   Stop Loss: ${stop_loss:.4f} ({tp_sl_info['sl_pct']:+.2f}%)")
+    print(f"   Take Profit: ${take_profit:.4f} ({tp_sl_info['tp_pct']:+.2f}%)")
+    print(f"   R/R Ratio: {tp_sl_info['rr_ratio']:.2f}")
+    print(f"   Movimiento predicho: {tp_sl_info['pred_move_pct']:+.2f}%")
+    print(f"   Factor TP: {tp_sl_info['tp_factor']*100:.0f}% del movimiento predicho")
     
     trade_validation = rm.validate_trade(current_price, take_profit, stop_loss, side)
     
@@ -486,7 +566,7 @@ def execute_trading_strategy():
         send_telegram(msg)
         return
     
-    print(f"✅ R/R Ratio: {trade_validation['rr_ratio']:.2f}")
+    print(f"\n✅ Trade validado (R/R: {trade_validation['rr_ratio']:.2f})")
     
     position = rm.calculate_position_size(
         current_price,
@@ -506,14 +586,13 @@ def execute_trading_strategy():
     print(f"   Volumen: {position['volume']} ADA")
     print(f"   Valor: ${position['position_value']:.2f}")
     print(f"   Leverage: {position['leverage']}x")
-    print(f"   Margen requerido: ${position['margin_required']:.2f}")
+    print(f"   Margen: ${position['margin_required']:.2f}")
+    print(f"   Fees: ${position['total_fees_usd']:.2f}")
     print(f"   Liquidación: ${position['liquidation_price']:.4f}")
-    print(f"   Fees totales: ${position['total_fees_usd']:.2f}")
     
-    print(f"\n🚀 EJECUTANDO ORDEN EN KRAKEN CON SL AUTOMÁTICO...")
+    print(f"\n🚀 EJECUTANDO ORDEN...")
     
-    # 🔥 USAR LA NUEVA FUNCIÓN CON SL
-    order_result = place_margin_order_with_sl(
+    order_result = place_market_order_with_separate_sl(
         side=side,
         volume=position['volume'],
         leverage=position['leverage'],
@@ -527,19 +606,19 @@ def execute_trading_strategy():
         send_telegram(msg)
         return
     
-    save_order_to_tracking(order_result, signal, position)
+    save_order_to_tracking(order_result, signal, position, tp_sl_info)
     rm.reserve_margin(position['margin_required'])
     
-    # 🔥 MENSAJE MEJORADO con predicciones del modelo
+    # Mensaje de Telegram
     pred_info = ""
     if side == 'buy':
-        pred_high = signal.get('pred_high', 0)
-        if pred_high > 0:
-            pred_info = f"\n📈 *Predicción Modelo:*\n   High: ${pred_high:.4f} (+{((pred_high - current_price) / current_price * 100):.2f}%)"
+        pred_high = tp_sl_info.get('pred_high', 0)
+        if pred_high:
+            pred_info = f"\n📈 *Predicción:* ${pred_high:.4f} (+{tp_sl_info['pred_move_pct']:.2f}%)"
     else:
-        pred_low = signal.get('pred_low', 0)
-        if pred_low > 0:
-            pred_info = f"\n📉 *Predicción Modelo:*\n   Low: ${pred_low:.4f} ({((pred_low - current_price) / current_price * 100):.2f}%)"
+        pred_low = tp_sl_info.get('pred_low', 0)
+        if pred_low:
+            pred_info = f"\n📉 *Predicción:* ${pred_low:.4f} (-{tp_sl_info['pred_move_pct']:.2f}%)"
     
     msg = f"""
 🚀 *ORDEN EJECUTADA*
@@ -547,7 +626,7 @@ def execute_trading_strategy():
 📊 *Setup:*
    • Señal: {signal['signal']}
    • Confianza: {signal['confidence']:.1f}%
-   • Precio: ${current_price:.4f}
+   • Entry: ${current_price:.4f}
 {pred_info}
 
 💼 *Posición:*
@@ -557,16 +636,15 @@ def execute_trading_strategy():
    • Margen: ${position['margin_required']:.2f}
 
 🎯 *Objetivos:*
-   • TP: ${take_profit:.4f} (70% de pred - monitoreo manual)
-   • SL: ${stop_loss:.4f} 🛡️ *AUTOMÁTICO*
-   • R/R: {trade_validation['rr_ratio']:.2f}
+   • TP: ${take_profit:.4f} ({tp_sl_info['tp_pct']:+.2f}% - {tp_sl_info['tp_factor']*100:.0f}% del pred)
+   • SL: ${stop_loss:.4f} ({tp_sl_info['sl_pct']:+.2f}%) 🛡️ *VISIBLE EN KRAKEN*
+   • R/R: {tp_sl_info['rr_ratio']:.2f}
    • Liquidación: ${position['liquidation_price']:.4f}
 
-💰 *Fees:*
-   • Total: ${position['total_fees_usd']:.2f}
-   • Ganancia mínima: ${position['min_profit_needed_usd']:.2f}
+💰 *Fees:* ${position['total_fees_usd']:.2f}
 
-🆔 Order ID: `{order_result['order_id']}`
+🆔 Order: `{order_result['order_id']}`
+🛡️ SL Order: `{order_result.get('sl_order_id', 'N/A')}`
 """
     
     print(msg.replace('*', '').replace('`', ''))
@@ -577,14 +655,9 @@ def execute_trading_strategy():
     print("="*70)
 
 def monitor_orders():
-    """
-    Monitorea órdenes abiertas - Solo revisa TAKE PROFIT
-    (El stop-loss es automático en Kraken)
-    🔥 AHORA sincroniza con Kraken al inicio
-    """
-    print("\n🔍 Monitoreando órdenes abiertas (solo TP)...")
+    """Monitorea órdenes abiertas para TAKE PROFIT"""
+    print("\n🔍 Monitoreando órdenes abiertas...")
     
-    # 🆕 Sincronizar con Kraken PRIMERO
     orders = sync_open_orders_with_kraken()
     
     if len(orders) == 0:
@@ -596,65 +669,58 @@ def monitor_orders():
     current_price = get_current_price()
     
     if not current_price:
-        print("❌ No se pudo obtener precio para monitorear")
+        print("❌ No se pudo obtener precio")
         return
     
     for order_id, order_info in list(orders.items()):
         print(f"\n📊 Orden {order_id}:")
-        print(f"   Lado: {order_info['side']}")
         print(f"   Entry: ${order_info['entry_price']:.4f}")
         print(f"   Current: ${current_price:.4f}")
         print(f"   TP: ${order_info['take_profit']:.4f}")
-        print(f"   SL: ${order_info['stop_loss']:.4f} {'🛡️ (auto)' if order_info.get('has_auto_sl') else ''}")
+        print(f"   SL: ${order_info['stop_loss']:.4f} 🛡️")
+        
+        if order_info.get('sl_order_id'):
+            print(f"   SL Order: {order_info['sl_order_id']}")
         
         close_reason = None
         
-        # Solo revisar TP y TIMEOUT (el SL es automático)
         if order_info['side'] == 'buy':
             pnl_pct = ((current_price - order_info['entry_price']) / order_info['entry_price']) * 100
             
             if current_price >= order_info['take_profit']:
-                print("✅ TP alcanzado - Cerrando posición")
+                print("✅ TP alcanzado")
                 close_reason = 'TP'
             else:
-                print(f"💹 P&L actual: {pnl_pct:+.2f}%")
+                print(f"💹 P&L: {pnl_pct:+.2f}%")
         else:
             pnl_pct = ((order_info['entry_price'] - current_price) / order_info['entry_price']) * 100
             
             if current_price <= order_info['take_profit']:
-                print("✅ TP alcanzado - Cerrando posición")
+                print("✅ TP alcanzado")
                 close_reason = 'TP'
             else:
-                print(f"💹 P&L actual: {pnl_pct:+.2f}%")
+                print(f"💹 P&L: {pnl_pct:+.2f}%")
         
-        # Verificar timeout (3.5 horas)
         entry_time = datetime.fromisoformat(order_info['entry_time'])
         time_open = datetime.now() - entry_time
         
         if time_open > timedelta(hours=3.5):
-            print("⏰ Timeout alcanzado (3.5h) - Cerrando para evitar rollover")
+            print("⏰ Timeout (3.5h)")
             close_reason = 'TIMEOUT'
         
-        # Cerrar si hay razón
         if close_reason:
-            success = close_position(
-                order_id,
-                order_info['side'],
-                order_info['volume']
-            )
+            success = close_position(order_id, order_info['side'], order_info['volume'])
             
             if success:
-                # Remover de open_orders
                 del orders[order_id]
                 
                 msg = f"🔒 *Posición Cerrada*\n\n"
                 msg += f"Razón: {close_reason}\n"
                 msg += f"P&L: {pnl_pct:+.2f}%\n"
-                msg += f"Tiempo abierto: {time_open}"
+                msg += f"Duración: {time_open}"
                 
                 send_telegram(msg)
     
-    # Guardar órdenes actualizadas
     with open(OPEN_ORDERS_FILE, 'w') as f:
         json.dump(orders, f, indent=2)
 
@@ -665,7 +731,7 @@ if __name__ == "__main__":
         monitor_orders()
         
     except Exception as e:
-        error_msg = f"❌ Error en trader: {str(e)}"
+        error_msg = f"❌ Error: {str(e)}"
         print(error_msg)
         send_telegram(error_msg)
         raise
