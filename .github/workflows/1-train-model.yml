@@ -101,3 +101,10 @@ jobs:
           else
             echo "Entrenamiento no necesario (modelo vigente)"
           fi
+
+      - name: Commit & Push changes
+        if: steps.check.outputs.should_train == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+            commit_message: "Model trained $(date -u +%Y-%m-%d)"
+            file_pattern: 'ADAUSD_MODELS/* ADAUSD_1h_data.csv *.png'
