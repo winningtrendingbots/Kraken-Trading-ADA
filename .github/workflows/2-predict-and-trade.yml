@@ -191,8 +191,9 @@ jobs:
             fi
           fi
       
-      - name: 🔮 Generate predictions (Legacy)
-        if: steps.check.outputs.has_model == 'true' && github.event.inputs.use_legacy_predictor == 'true'
+      # Reemplazar los dos pasos de predicción por uno solo:
+      - name: 🔮 Generate predictions (5min)
+        if: steps.check.outputs.has_model == 'true'
         env:
           KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
           KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
@@ -201,11 +202,11 @@ jobs:
         run: |
           echo ""
           echo "🔮 ============================================"
-          echo "   GENERANDO PREDICCIONES (LEGACY)"
+          echo "   GENERANDO PREDICCIONES (5 MINUTOS)"
           echo "============================================"
           echo ""
-          echo "⚠️ Usando predict_and_filter.py (antiguo)"
-          echo ""
+          
+          python predict_enhanced_5min.py
           
           if python predict_and_filter.py; then
             echo ""
