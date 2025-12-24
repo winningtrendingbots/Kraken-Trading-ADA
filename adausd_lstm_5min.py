@@ -95,6 +95,29 @@ def download_adausd(interval='1h', path='ADAUSD_1h_data.csv'):
     print(f"\n✅ Guardado: {len(df):,} velas")
     return df
 
+class ConstrainedMSELoss(nn.Module):
+    """
+    Loss function que penaliza si High < Low
+    """
+    def __init__(self, constraint_weight=10.0):
+        super().__init__()
+        self.mse = nn.MSELoss()
+        self.constraint_weight = constraint_weight
+    
+    def forward(self, predictions, targets):
+        # MSE normal
+        mse_loss = self.mse(predictions, targets)
+        
+        # Penalización si High < Low
+        pred_high = predictions[:, 0]
+        pred_low = predictions[:, 1]
+        
+        # Si high < low, agregar penalización
+        violation = torch.clamp(pred_low - pred_high, min=0)
+        constraint_loss = violation.mean()
+        
+        return mse_loss + self.constraint_weight * constraint_loss
+
 class ForexDataset(torch.utils.data.Dataset):
     def __init__(self, X, y):
         self.X = torch.FloatTensor(X)
@@ -239,7 +262,8 @@ def train_model(model, train_loader, val_loader, epochs, lr, device, patience):
     print("="*70)
     print(f"Epochs: {epochs} | LR: {lr} | Device: {device} | Patience: {patience}\n")
 
-    criterion = nn.MSELoss()
+    criterion = ConstrainedMSELoss(constraint_weight=10.0)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
     early_stop = EarlyStopping(patience)
