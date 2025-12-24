@@ -1,14 +1,10 @@
-name: 🤖 Train Model
+name: 🤖  Train AI Model (5m)
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    # Ejecutar cada 6 horas
+    - cron: '0 */6 * * *'
   workflow_dispatch:
-    inputs:
-      force_train:
-        description: 'Forzar reentrenamiento'
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -16,95 +12,46 @@ permissions:
 jobs:
   train:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Check if training needed
-        id: check
-        run: |
-          echo "Verificando si necesita reentrenamiento..."
-          
-          if [ "${{ github.event.inputs.force_train }}" = "true" ]; then
-            echo "Entrenamiento forzado"
-            echo "should_train=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          if [ -d "ADAUSD_MODELS" ] && [ "$(ls -A ADAUSD_MODELS/*.keras 2>/dev/null)" ]; then
-            last_train=$(find ADAUSD_MODELS -type f -name "*.keras" -printf '%T@\n' | sort -n | tail -1 2>/dev/null || echo "0")
-            current_time=$(date +%s)
-            age=$((current_time - ${last_train:-0}))
-            days=$((age / 86400))
-            
-            echo "Modelo tiene $days dias"
-            
-            if [ $days -gt 7 ]; then
-              echo "Reentrenamiento necesario (>7 dias)"
-              echo "should_train=true" >> $GITHUB_OUTPUT
-            else
-              echo "Modelo vigente ($days dias)"
-              echo "should_train=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "No existe modelo, entrenar"
-            echo "should_train=true" >> $GITHUB_OUTPUT
-          fi
-      
-      - name: Setup Python
-        if: steps.check.outputs.should_train == 'true'
-        uses: actions/setup-python@v5
+      - name: Checkout repo
+        uses: actions/checkout@v3
         with:
-          python-version: '3.11'
-          cache: 'pip'
-      
+          fetch-depth: 0  # Importante para poder hacer merge/rebase
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
       - name: Install dependencies
-        if: steps.check.outputs.should_train == 'true'
         run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-      
-      - name: Train LSTM model
+          pip install pandas numpy requests tensorflow scikit-learn matplotlib joblib
+
+      - name: Check if market is active (Simple check)
+        id: check
+        run: echo "should_train=true" >> $GITHUB_OUTPUT
+
+      - name: Train Model
         if: steps.check.outputs.should_train == 'true'
-        env:
-          KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
-          KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
-          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: |
-          echo "Iniciando entrenamiento del modelo LSTM..."
-          python adausd_lstm_5min.py
-          echo "Entrenamiento completado"
-      
-      - name: Commit model
+        run: python adausd_lstm_5min.py
+
+      - name: Commit model and results
         if: steps.check.outputs.should_train == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          git add ADAUSD_MODELS/ ADAUSD_1h_data.csv *.png 2>/dev/null || true
+          # --- CORRECCIÓN DE ERROR DE PUSH ---
+          # 1. Asegurar que tenemos la última versión remota
+          git pull origin main --rebase
           
+          # 2. Añadir archivos
+          git add ADAUSD_MODELS/ ADAUSD_1h_data.csv training_loss.png latest_pred.json 2>/dev/null || true
+          
+          # 3. Commit y Push
           if git diff --staged --quiet; then
-            echo "No hay cambios para commitear"
+            echo "No changes to commit"
           else
-            git commit -m "Model trained $(date -u +%Y-%m-%d)"
-            git push
-            echo "Modelo guardado en repositorio"
+            git commit -m "Auto-train model $(date -u +%Y-%m-%d)"
+            git push origin main
           fi
-      
-      - name: Training summary
-        if: always()
-        run: |
-          if [ "${{ steps.check.outputs.should_train }}" = "true" ]; then
-            echo "Modelo entrenado exitosamente"
-          else
-            echo "Entrenamiento no necesario (modelo vigente)"
-          fi
-
-      - name: Commit & Push changes
-        if: steps.check.outputs.should_train == 'true'
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-            commit_message: "Model trained $(date -u +%Y-%m-%d)"
-            file_pattern: 'ADAUSD_MODELS/* ADAUSD_1h_data.csv *.png'
