@@ -2,6 +2,7 @@
 GESTOR DE RIESGO Y CAPITAL - VERSIÓN MEJORADA
 
 ✅ Optimizado para banca pequeña (10€)
+✅ Leverage ENTERO (2-5x) - Compatible con Kraken
 ✅ Protección contra comisiones del 100%
 ✅ Evita rollover fees (cierre antes de 4h)
 ✅ Cálculo de fees totales ANTES de operar
@@ -231,7 +232,8 @@ class RiskManager:
     
     def calculate_position_size(self, entry_price, stop_loss, confidence, side='buy', use_leverage=True):
         """
-        🆕 VERSIÓN MEJORADA - Protección contra comisiones del 100%
+        🔥 FIXED: Leverage siempre ENTERO (2, 3, 4, 5)
+        Protección contra comisiones del 100%
         """
         result = {
             'valid': False,
@@ -265,16 +267,27 @@ class RiskManager:
             result['reason'] = "Stop loss inválido"
             return result
         
-        # 4. Determinar leverage
+        # 🔥 4. Determinar leverage ENTERO
         if use_leverage and self.max_leverage > 1:
             if self.current_capital < 20:
-                confidence_factor = (confidence - 70) / 30
-                base_leverage = 2 + (confidence_factor * 1)
-                leverage = min(round(base_leverage, 1), 3)
+                # Banca pequeña: solo 2x o 3x
+                if confidence >= 85:
+                    leverage = 3
+                else:
+                    leverage = 2
             else:
-                confidence_factor = (confidence - 70) / 30
-                base_leverage = 3 + (confidence_factor * 2)
-                leverage = min(round(base_leverage, 1), self.max_leverage)
+                # Banca normal: 2-5x según confianza
+                if confidence >= 90:
+                    leverage = 5
+                elif confidence >= 85:
+                    leverage = 4
+                elif confidence >= 80:
+                    leverage = 3
+                else:
+                    leverage = 2
+            
+            # Limitar al máximo configurado
+            leverage = min(leverage, self.max_leverage)
         else:
             leverage = 1
         
@@ -307,7 +320,8 @@ class RiskManager:
         liq_calc = self.calculate_liquidation_price(entry_price, stop_loss, leverage, side)
         
         if not liq_calc['safe']:
-            safe_leverage = max(1, leverage / 2)
+            # Reducir leverage al siguiente entero inferior
+            safe_leverage = max(2, leverage - 1)
             leverage = safe_leverage
             liq_calc = self.calculate_liquidation_price(entry_price, stop_loss, leverage, side)
             print(f"⚠️ Leverage reducido a {leverage}x por seguridad")
@@ -353,7 +367,7 @@ class RiskManager:
             'volume': round(volume, 0),
             'risk_amount': risk_usd,
             'position_value': position_value,
-            'leverage': leverage,
+            'leverage': int(leverage),  # 🔥 Asegurar que es entero
             'margin_required': margin_calc['margin_required'],
             'margin_available': margin_calc['margin_available'],
             'margin_after': margin_calc['margin_after'],
@@ -369,7 +383,7 @@ class RiskManager:
             'total_fees_usd': fees_info['total_fees'],
             'total_fees_%': fees_info['total_fees_%'],
             'min_profit_needed_usd': fees_info['min_profit_needed'],
-            'reason': f'Validado OK - Leverage {leverage}x - Fees ${fees_info["total_fees"]:.2f}'
+            'reason': f'Validado OK - Leverage {int(leverage)}x - Fees ${fees_info["total_fees"]:.2f}'
         })
         
         return result
