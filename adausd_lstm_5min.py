@@ -448,13 +448,13 @@ if __name__ == "__main__":
         # 🔥 CONFIGURACIÓN OPTIMIZADA PARA 5 MINUTOS
         INTERVAL = '1h'      # Velas de 1 hora como contexto
         SEQ_LEN = 72         # 3 días de contexto (72 horas)
-        HIDDEN = 160         # Capacidad del modelo
+        HIDDEN = 128         # Capacidad del modelo
         LAYERS = 3           # Profundidad
         DROPOUT = 0.35       # Regularización
-        BATCH = 96           # Tamaño de batch
-        EPOCHS = 180         # Épocas de entrenamiento
+        BATCH = 128           # Tamaño de batch
+        EPOCHS = 100         # Épocas de entrenamiento
         LR = 0.0012          # Learning rate
-        PATIENCE = 15        # Paciencia para early stopping
+        PATIENCE = 8        # Paciencia para early stopping
 
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"🖥️ Device: {device}\n")
