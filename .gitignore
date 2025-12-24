@@ -27,6 +27,7 @@ Thumbs.db
 # Logs
 *.log
 
+
 # ============================================
 # ✅ ARCHIVOS DEL MODELO - NO IGNORAR
 # ============================================
@@ -36,10 +37,17 @@ Thumbs.db
 !ADAUSD_MODELS/*.json
 !ADAUSD_1h_data.csv
 !adausd_results.png
+!adausd_delta_results.png
 !trading_analytics.png
 !LAST_TRAINING.txt
 !risk_config.json
 !prediction_tracker.csv
+
+# Modelos específicos
+!ADAUSD_MODELS/adausd_lstm_delta.pth
+!ADAUSD_MODELS/scaler_input_delta.pkl
+!ADAUSD_MODELS/scaler_output_delta.pkl
+!ADAUSD_MODELS/config_delta.json
 
 # ============================================
 # ✅ WORKFLOWS - SIEMPRE INCLUIR
