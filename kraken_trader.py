@@ -287,6 +287,30 @@ def save_order_to_tracking(order_info, signal_info, position_info):
     
     print(f"✅ Orden guardada en {OPEN_ORDERS_FILE}")
 
+def verify_pair_info():
+    """Verifica información del par de trading"""
+    try:
+        url = "https://api.kraken.com/0/public/AssetPairs?pair=ADAUSD"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        if data.get('error') and len(data['error']) > 0:
+            print(f"❌ Error verificando par: {data['error']}")
+            return None
+        
+        pair_info = data['result']
+        print(f"\n📊 Info del par:")
+        for key, info in pair_info.items():
+            print(f"   Pair Key: {key}")
+            print(f"   Min Order: {info.get('ordermin', 'N/A')}")
+            print(f"   Decimals: {info.get('pair_decimals', 'N/A')}")
+        
+        return pair_info
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return None
+
 def execute_trading_strategy():
     """
     🔥 FUNCIÓN PRINCIPAL - Ejecuta estrategia de trading
@@ -299,6 +323,8 @@ def execute_trading_strategy():
     if check_existing_orders():
         print("\n⏸️ Ya hay posiciones abiertas. Saltando ejecución.")
         return
+
+    verify_pair_info()
     
     # 2. Cargar señal más reciente
     signal = load_last_signal()
