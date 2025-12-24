@@ -1,0 +1,230 @@
+name: 🤖 Train Model (Delta + Volume)
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Diario a las 2 AM UTC
+  workflow_dispatch:
+    inputs:
+      force_train:
+        description: 'Forzar reentrenamiento'
+        type: boolean
+        default: false
+      use_legacy_model:
+        description: 'Usar modelo antiguo (sin deltas)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🔍 Check if training needed
+        id: check
+        run: |
+          echo "Verificando si necesita reentrenamiento..."
+          
+          # Forzar entrenamiento si se solicita
+          if [ "${{ github.event.inputs.force_train }}" = "true" ]; then
+            echo "🔧 Entrenamiento forzado"
+            echo "should_train=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Verificar edad del modelo
+          if [ -d "ADAUSD_MODELS" ] && [ "$(ls -A ADAUSD_MODELS/*delta.pth 2>/dev/null)" ]; then
+            last_train=$(find ADAUSD_MODELS -type f -name "*delta.pth" -printf '%T@\n' | sort -n | tail -1 2>/dev/null || echo "0")
+            current_time=$(date +%s)
+            age=$((current_time - ${last_train:-0}))
+            days=$((age / 86400))
+            
+            echo "📊 Modelo Delta tiene $days días"
+            
+            if [ $days -gt 7 ]; then
+              echo "🔄 Reentrenamiento necesario (>7 días)"
+              echo "should_train=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ Modelo vigente ($days días)"
+              echo "should_train=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ No existe modelo Delta, entrenar"
+            echo "should_train=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 🐍 Setup Python
+        if: steps.check.outputs.should_train == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 📦 Install dependencies
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          echo "📦 Instalando dependencias..."
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 🧠 Train LSTM Model (Delta + Volume)
+        if: steps.check.outputs.should_train == 'true' && github.event.inputs.use_legacy_model != 'true'
+        env:
+          KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
+          KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          echo ""
+          echo "🔥 ============================================"
+          echo "   ENTRENANDO MODELO CON DELTAS Y VOLUMEN"
+          echo "============================================"
+          echo ""
+          echo "✨ Características:"
+          echo "   • Predicción de deltas (anclaje garantizado)"
+          echo "   • Análisis de volumen avanzado"
+          echo "   • Indicadores OBV, VWAP, PVT"
+          echo "   • Detección de divergencias"
+          echo "   • Validación de breakouts"
+          echo ""
+          
+          python adausd_lstm_5min_delta.py
+          
+          echo ""
+          echo "✅ Entrenamiento completado"
+      
+      - name: 🧠 Train Legacy Model (sin deltas)
+        if: steps.check.outputs.should_train == 'true' && github.event.inputs.use_legacy_model == 'true'
+        env:
+          KRAKEN_API_KEY: ${{ secrets.KRAKEN_API_KEY }}
+          KRAKEN_API_SECRET: ${{ secrets.KRAKEN_API_SECRET }}
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          echo "⚠️ Usando modelo legacy (sin deltas)"
+          python adausd_lstm_5min.py
+      
+      - name: 📊 Validate model
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          echo ""
+          echo "🔍 Validando modelo generado..."
+          
+          if [ -f "ADAUSD_MODELS/adausd_lstm_delta.pth" ]; then
+            echo "✅ Modelo Delta encontrado"
+            
+            # Verificar tamaño
+            size=$(stat -f%z "ADAUSD_MODELS/adausd_lstm_delta.pth" 2>/dev/null || stat -c%s "ADAUSD_MODELS/adausd_lstm_delta.pth")
+            echo "   Tamaño: $(($size / 1024 / 1024)) MB"
+            
+            # Verificar config
+            if [ -f "ADAUSD_MODELS/config_delta.json" ]; then
+              echo "✅ Configuración encontrada"
+              
+              # Mostrar configuración
+              echo ""
+              echo "⚙️ Configuración del modelo:"
+              python3 << 'PYEOF'
+import json
+try:
+    with open('ADAUSD_MODELS/config_delta.json', 'r') as f:
+        config = json.load(f)
+    
+    print(f"   Use Volume: {config.get('use_volume', 'N/A')}")
+    print(f"   Use Delta: {config.get('use_delta', 'N/A')}")
+    print(f"   Volume Indicators: {config.get('volume_indicators', 'N/A')}")
+    print(f"   Predict Volume: {config.get('predict_volume', 'N/A')}")
+    print(f"   Input Size: {config.get('input_size', 'N/A')}")
+    print(f"   Output Size: {config.get('output_size', 'N/A')}")
+    
+    if 'metrics_test' in config:
+        print("\n📊 Métricas de Test:")
+        for target, metrics in config['metrics_test'].items():
+            print(f"\n   {target}:")
+            print(f"      R²: {metrics.get('R2', 'N/A'):.4f}")
+            print(f"      MAE: {metrics.get('MAE', 'N/A'):.6f}")
+except Exception as e:
+    print(f"   Error parseando config: {e}")
+PYEOF
+            else
+              echo "⚠️ No se encontró config_delta.json"
+            fi
+            
+          else
+            echo "❌ Modelo Delta no generado"
+            exit 1
+          fi
+      
+      - name: 💾 Commit model
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Añadir archivos del modelo
+          git add ADAUSD_MODELS/*delta* 2>/dev/null || true
+          git add ADAUSD_MODELS/*.json 2>/dev/null || true
+          git add ADAUSD_1h_data.csv 2>/dev/null || true
+          git add *delta_results.png 2>/dev/null || true
+          
+          if git diff --staged --quiet; then
+            echo "ℹ️ No hay cambios para commitear"
+          else
+            echo "📋 Archivos a commitear:"
+            git diff --staged --name-only
+            
+            TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+            git commit -m "🤖 Model (Delta) trained: $TIMESTAMP"
+            
+            # Push con retry
+            MAX_RETRIES=3
+            for i in $(seq 1 $MAX_RETRIES); do
+              if git push; then
+                echo ""
+                echo "✅ Modelo guardado en repositorio"
+                break
+              else
+                if [ $i -lt $MAX_RETRIES ]; then
+                  echo "⚠️ Reintentando push ($i/$MAX_RETRIES)..."
+                  sleep 2
+                  git pull --rebase
+                else
+                  echo "❌ Error al guardar modelo después de $MAX_RETRIES intentos"
+                  exit 1
+                fi
+              fi
+            done
+          fi
+      
+      - name: 📊 Training summary
+        if: always()
+        run: |
+          echo ""
+          echo "══════════════════════════════════════════════════════════════════════"
+          if [ "${{ steps.check.outputs.should_train }}" = "true" ]; then
+            if [ "${{ github.event.inputs.use_legacy_model }}" = "true" ]; then
+              echo "  ✅ MODELO LEGACY ENTRENADO (sin deltas)"
+            else
+              echo "  ✅ MODELO DELTA+VOLUME ENTRENADO"
+            fi
+            
+            echo ""
+            echo "📁 Archivos generados:"
+            [ -f "ADAUSD_MODELS/adausd_lstm_delta.pth" ] && echo "   ✅ adausd_lstm_delta.pth" || echo "   ❌ adausd_lstm_delta.pth"
+            [ -f "ADAUSD_MODELS/config_delta.json" ] && echo "   ✅ config_delta.json" || echo "   ❌ config_delta.json"
+            [ -f "ADAUSD_MODELS/scaler_input_delta.pkl" ] && echo "   ✅ scaler_input_delta.pkl" || echo "   ❌ scaler_input_delta.pkl"
+            [ -f "ADAUSD_MODELS/scaler_output_delta.pkl" ] && echo "   ✅ scaler_output_delta.pkl" || echo "   ❌ scaler_output_delta.pkl"
+            [ -f "adausd_delta_results.png" ] && echo "   ✅ adausd_delta_results.png" || echo "   ⚠️ adausd_delta_results.png"
+            
+          else
+            echo "  ℹ️ ENTRENAMIENTO NO NECESARIO"
+            echo ""
+            echo "📊 Modelo vigente"
+          fi
+          echo "══════════════════════════════════════════════════════════════════════"
