@@ -1,10 +1,9 @@
 """
-KRAKEN TRADER - VERSIÓN CORREGIDA
+KRAKEN TRADER - VERSIÓN CORREGIDA PARA MARGIN
 
-✅ Lee señales de trading_signals.csv
+✅ Lee balance de MARGIN (no spot)
 ✅ Ejecuta órdenes EN KRAKEN
 ✅ Protección contra comisiones del 100%
-✅ Monitoreo y cierre automático
 """
 
 import pandas as pd
@@ -86,21 +85,42 @@ def kraken_request(uri_path, data):
         return None
 
 def get_account_balance():
-    """Obtiene balance de la cuenta en USD"""
-    print("\n💰 Obteniendo balance de Kraken...")
+    """
+    🔥 FIXED: Obtiene balance de MARGIN (no spot)
+    """
+    print("\n💰 Obteniendo balance de Kraken (MARGIN)...")
     
-    result = kraken_request('/0/private/Balance', {})
+    # 1. Primero intentar TradeBalance (incluye margin)
+    result = kraken_request('/0/private/TradeBalance', {'asset': 'ZUSD'})
     
-    if not result:
+    if result:
+        # eb = equivalent balance (spot + margin disponible)
+        margin_balance = float(result.get('eb', 0))
+        free_margin = float(result.get('mf', 0))  # margin free
+        used_margin = float(result.get('m', 0))   # margin used
+        
+        print(f"📊 Balance de Trading:")
+        print(f"   💵 Total disponible: ${margin_balance:.2f}")
+        print(f"   ✅ Margen libre: ${free_margin:.2f}")
+        print(f"   🔒 Margen usado: ${used_margin:.2f}")
+        
+        if free_margin < 5:
+            print(f"⚠️ Margen libre insuficiente para operar (mínimo $5)")
+        
+        return free_margin  # Devolver solo el margen LIBRE
+    
+    # 2. Fallback: Balance normal (por si acaso)
+    print("⚠️ TradeBalance falló, intentando Balance normal...")
+    result_spot = kraken_request('/0/private/Balance', {})
+    
+    if not result_spot:
         print("❌ No se pudo obtener balance")
         return None
     
-    # 🔥 FIX: Kraken usa 'ZUSD' para USD
-    usd_balance = float(result.get('ZUSD', result.get('USD', 0)))
+    usd_balance = float(result_spot.get('ZUSD', result_spot.get('USD', 0)))
     
-    # Debug: Mostrar todas las monedas disponibles
-    print(f"📊 Balances disponibles:")
-    for currency, amount in result.items():
+    print(f"📊 Balance spot:")
+    for currency, amount in result_spot.items():
         if float(amount) > 0:
             print(f"   • {currency}: {float(amount):.2f}")
     
@@ -122,7 +142,6 @@ def get_current_price():
             print(f"❌ Error obteniendo precio: {data['error']}")
             return None
         
-        # Kraken devuelve el par con formato diferente
         pair_key = list(data['result'].keys())[0]
         price = float(data['result'][pair_key]['c'][0])
         
@@ -148,13 +167,11 @@ def load_last_signal():
             print("⚠️ CSV vacío")
             return None
         
-        # Ordenar por timestamp y tomar la última
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df = df.sort_values('timestamp', ascending=False)
         
         last_signal = df.iloc[0]
         
-        # Verificar que no sea muy antigua (máximo 2 horas)
         signal_age = datetime.now() - last_signal['timestamp']
         
         if signal_age > timedelta(hours=2):
@@ -191,12 +208,6 @@ def check_existing_orders():
 def place_margin_order(side, volume, leverage, entry_price=None):
     """
     Coloca orden de MARGIN en Kraken
-    
-    Args:
-        side: 'buy' o 'sell'
-        volume: Cantidad de ADA
-        leverage: Multiplicador (2-5)
-        entry_price: Precio límite (None = market)
     """
     print(f"\n📤 Colocando orden MARGIN {side.upper()}...")
     print(f"   Volumen: {volume} ADA")
@@ -208,7 +219,7 @@ def place_margin_order(side, volume, leverage, entry_price=None):
         'ordertype': 'market' if entry_price is None else 'limit',
         'volume': str(volume),
         'leverage': str(leverage),
-        'oflags': 'post'  # Post-only para maker fee
+        'oflags': 'post'
     }
     
     if entry_price:
@@ -235,7 +246,6 @@ def place_margin_order(side, volume, leverage, entry_price=None):
 def save_order_to_tracking(order_info, signal_info, position_info):
     """Guarda orden en archivos de tracking"""
     
-    # 1. Guardar en orders_executed.csv
     order_data = {
         'timestamp': datetime.now(),
         'order_id': order_info['order_id'],
@@ -259,7 +269,6 @@ def save_order_to_tracking(order_info, signal_info, position_info):
     
     print(f"✅ Orden guardada en {ORDERS_FILE}")
     
-    # 2. Guardar en open_orders.json
     open_order = {
         'order_id': order_info['order_id'],
         'side': order_info['side'],
@@ -273,7 +282,6 @@ def save_order_to_tracking(order_info, signal_info, position_info):
         'liquidation_price': position_info['liquidation_price']
     }
     
-    # Cargar órdenes existentes
     if os.path.exists(OPEN_ORDERS_FILE):
         with open(OPEN_ORDERS_FILE, 'r') as f:
             orders = json.load(f)
@@ -287,30 +295,6 @@ def save_order_to_tracking(order_info, signal_info, position_info):
     
     print(f"✅ Orden guardada en {OPEN_ORDERS_FILE}")
 
-def verify_pair_info():
-    """Verifica información del par de trading"""
-    try:
-        url = "https://api.kraken.com/0/public/AssetPairs?pair=ADAUSD"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        
-        if data.get('error') and len(data['error']) > 0:
-            print(f"❌ Error verificando par: {data['error']}")
-            return None
-        
-        pair_info = data['result']
-        print(f"\n📊 Info del par:")
-        for key, info in pair_info.items():
-            print(f"   Pair Key: {key}")
-            print(f"   Min Order: {info.get('ordermin', 'N/A')}")
-            print(f"   Decimals: {info.get('pair_decimals', 'N/A')}")
-        
-        return pair_info
-        
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        return None
-
 def execute_trading_strategy():
     """
     🔥 FUNCIÓN PRINCIPAL - Ejecuta estrategia de trading
@@ -319,21 +303,16 @@ def execute_trading_strategy():
     print("  💼 EJECUTANDO ESTRATEGIA DE TRADING")
     print("="*70 + "\n")
     
-    # 1. Verificar si ya hay posiciones abiertas
     if check_existing_orders():
         print("\n⏸️ Ya hay posiciones abiertas. Saltando ejecución.")
         return
-
-    verify_pair_info()
     
-    # 2. Cargar señal más reciente
     signal = load_last_signal()
     
     if not signal:
         print("\n⚠️ No hay señales válidas para ejecutar")
         return
     
-    # 3. Verificar que sea BUY o SELL (no HOLD)
     if signal['signal'] == 'HOLD':
         print(f"\n⏸️ Señal es HOLD. No se ejecuta trade.")
         return
@@ -341,7 +320,7 @@ def execute_trading_strategy():
     print(f"\n🎯 Procesando señal: {signal['signal']}")
     print(f"   Confianza: {signal['confidence']:.1f}%")
     
-    # 4. Obtener balance de Kraken
+    # 🔥 AQUÍ USA LA FUNCIÓN CORREGIDA
     balance = get_account_balance()
     
     if not balance or balance < 5:
@@ -350,33 +329,29 @@ def execute_trading_strategy():
         send_telegram(msg)
         return
     
-    # 5. Sincronizar Risk Manager con balance real
     rm = get_risk_manager()
     rm.sync_with_kraken_balance(balance)
     
-    # 6. Obtener precio actual
     current_price = get_current_price()
     
     if not current_price:
         print("❌ No se pudo obtener precio actual")
         return
     
-    # 7. Calcular stop loss y take profit
     side = signal['signal'].lower()
     
     if side == 'buy':
-        stop_loss = current_price * 0.98  # -2%
-        take_profit = signal.get('pred_close', current_price * 1.03)  # +3%
+        stop_loss = current_price * 0.98
+        take_profit = signal.get('pred_close', current_price * 1.03)
     else:
-        stop_loss = current_price * 1.02  # +2%
-        take_profit = signal.get('pred_close', current_price * 0.97)  # -3%
+        stop_loss = current_price * 1.02
+        take_profit = signal.get('pred_close', current_price * 0.97)
     
     print(f"\n📊 Setup del Trade:")
     print(f"   Entry: ${current_price:.4f}")
     print(f"   Stop Loss: ${stop_loss:.4f}")
     print(f"   Take Profit: ${take_profit:.4f}")
     
-    # 8. Validar R/R ratio
     trade_validation = rm.validate_trade(current_price, take_profit, stop_loss, side)
     
     if not trade_validation['valid']:
@@ -387,7 +362,6 @@ def execute_trading_strategy():
     
     print(f"✅ R/R Ratio: {trade_validation['rr_ratio']:.2f}")
     
-    # 9. Calcular tamaño de posición
     position = rm.calculate_position_size(
         current_price,
         stop_loss,
@@ -410,7 +384,6 @@ def execute_trading_strategy():
     print(f"   Liquidación: ${position['liquidation_price']:.4f}")
     print(f"   Fees totales: ${position['total_fees_usd']:.2f}")
     
-    # 10. EJECUTAR ORDEN EN KRAKEN
     print(f"\n🚀 EJECUTANDO ORDEN EN KRAKEN...")
     
     order_result = place_margin_order(
@@ -425,13 +398,9 @@ def execute_trading_strategy():
         send_telegram(msg)
         return
     
-    # 11. Guardar en tracking
     save_order_to_tracking(order_result, signal, position)
-    
-    # 12. Reservar margen en Risk Manager
     rm.reserve_margin(position['margin_required'])
     
-    # 13. Notificar éxito
     msg = f"""
 🚀 *ORDEN EJECUTADA*
 
@@ -497,14 +466,11 @@ def monitor_orders():
         print(f"   TP: ${order_info['take_profit']:.4f}")
         print(f"   SL: ${order_info['stop_loss']:.4f}")
         
-        # Calcular P&L actual
         if order_info['side'] == 'buy':
             pnl_pct = ((current_price - order_info['entry_price']) / order_info['entry_price']) * 100
             
-            # Verificar TP o SL
             if current_price >= order_info['take_profit']:
                 print("✅ TP alcanzado - Cerrando posición")
-                # TODO: Implementar cierre real en Kraken
                 close_reason = 'TP'
             elif current_price <= order_info['stop_loss']:
                 print("🛑 SL alcanzado - Cerrando posición")
@@ -512,7 +478,7 @@ def monitor_orders():
             else:
                 print(f"💹 P&L actual: {pnl_pct:+.2f}%")
                 continue
-        else:  # sell
+        else:
             pnl_pct = ((order_info['entry_price'] - current_price) / order_info['entry_price']) * 100
             
             if current_price <= order_info['take_profit']:
@@ -525,7 +491,6 @@ def monitor_orders():
                 print(f"💹 P&L actual: {pnl_pct:+.2f}%")
                 continue
         
-        # Verificar timeout (3.5 horas)
         entry_time = datetime.fromisoformat(order_info['entry_time'])
         time_open = datetime.now() - entry_time
         
@@ -533,22 +498,15 @@ def monitor_orders():
             print("⏰ Timeout alcanzado (3.5h) - Cerrando para evitar rollover")
             close_reason = 'TIMEOUT'
         
-        # TODO: Cerrar orden en Kraken aquí
         print(f"🔄 Cerrando por {close_reason}...")
-        
-        # Remover de open_orders
         del orders[order_id]
     
-    # Guardar órdenes actualizadas
     with open(OPEN_ORDERS_FILE, 'w') as f:
         json.dump(orders, f, indent=2)
 
 if __name__ == "__main__":
     try:
-        # Ejecutar estrategia
         execute_trading_strategy()
-        
-        # Monitorear órdenes existentes
         time.sleep(2)
         monitor_orders()
         
