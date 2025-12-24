@@ -387,9 +387,6 @@ def download_and_prepare_data(symbol="ADA-USD", interval='1h', path='ADAUSD_1h_d
 def prepare_delta_dataset(df):
     """
     🔥 PREPARA DATOS CON DELTAS MEJORADOS
-    
-    Target: [delta_high, delta_low, delta_close]
-    donde delta = (valor_futuro - valor_actual) / valor_actual
     """
     print("\n" + "="*70)
     print("  🔧 PREPARACIÓN DE DATOS CON DELTAS MEJORADOS")
@@ -398,8 +395,10 @@ def prepare_delta_dataset(df):
     # 1. Calcular indicadores avanzados
     df = calculate_advanced_indicators(df)
 
-     # Aplicar limpieza adicional si es necesario
-    if df.isnull().any().any() or np.isinf(df.values).any():
+    # ==== CORRECCIÓN: Verificar solo columnas numéricas ====
+    # Aplicar limpieza adicional si es necesario
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    if df[numeric_cols].isnull().any().any() or np.isinf(df[numeric_cols].values).any():
         print("Aplicando limpieza adicional...")
         df = clean_financial_data(df, max_abs_value=1e6, fill_method='ffill')
     
@@ -413,26 +412,58 @@ def prepare_delta_dataset(df):
     df = df.dropna()
     print(f"📊 Datos después de limpieza: {len(df):,} de {initial_len:,} velas")
     
-    # 4. Seleccionar features
-    feature_cols = ['open', 'high', 'low', 'close', 'volume']
+    # 4. Seleccionar features (solo columnas numéricas relevantes)
+    # Primero obtener todas las columnas numéricas
+    all_numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     
+    # Quitar las columnas que no queremos como features
+    exclude_cols = ['delta_high', 'delta_low', 'delta_close']
+    feature_cols = [col for col in all_numeric_cols if col not in exclude_cols]
+    
+    # Asegurar que tenemos las columnas básicas
+    basic_cols = ['open', 'high', 'low', 'close', 'volume']
+    for col in basic_cols:
+        if col in df.columns and col not in feature_cols:
+            feature_cols.append(col)
+    
+    # Verificar indicadores específicos si están configurados
     if Config.USE_VOLUME_INDICATORS:
-        feature_cols.extend(['obv', 'obv_roc', 'vwap', 'pvt', 'volume_ratio', 'volume_rsi'])
+        volume_indicators = ['obv', 'obv_roc', 'vwap', 'pvt', 'volume_ratio', 'volume_rsi']
+        for indicator in volume_indicators:
+            if indicator in df.columns and indicator not in feature_cols:
+                feature_cols.append(indicator)
     
     if Config.USE_VOLUME_DERIVATIVES:
-        feature_cols.extend(['volume_1st_deriv', 'volume_2nd_deriv'])
+        volume_derivs = ['volume_1st_deriv', 'volume_2nd_deriv']
+        for deriv in volume_derivs:
+            if deriv in df.columns and deriv not in feature_cols:
+                feature_cols.append(deriv)
     
     if Config.USE_PRICE_DERIVATIVES:
-        feature_cols.extend(['price_1st_deriv', 'price_2nd_deriv'])
+        price_derivs = ['price_1st_deriv', 'price_2nd_deriv']
+        for deriv in price_derivs:
+            if deriv in df.columns and deriv not in feature_cols:
+                feature_cols.append(deriv)
     
     # Divergencias
-    feature_cols.extend(['bullish_divergence', 'bearish_divergence'])
+    divergence_cols = ['bullish_divergence', 'bearish_divergence']
+    for col in divergence_cols:
+        if col in df.columns and col not in feature_cols:
+            feature_cols.append(col)
     
     # Targets
     target_cols = ['delta_high', 'delta_low', 'delta_close']
     
     print(f"\n🎯 {len(feature_cols)} Features: {feature_cols}")
     print(f"🎯 {len(target_cols)} Targets: {target_cols}")
+    
+    # ==== CORRECCIÓN: Llamar a debug_data_issues con datos correctos ====
+    # Llamar a la función de depuración
+    problematic_cols = debug_data_issues(df, feature_cols)
+    
+    if problematic_cols:
+        print("⚠️  Problemas detectados. Aplicando limpieza...")
+        df = clean_financial_data(df, max_abs_value=1e6, fill_method='ffill')
     
     # 5. Dividir datos (temporal, no aleatorio)
     train_size = Config.TRAIN_SIZE
@@ -452,66 +483,49 @@ def prepare_delta_dataset(df):
     
     # 6. Normalización
     print(f"\n🔧 Normalización con {Config.SCALER_TYPE.upper()}...")
-
-    # Llamar a la función de depuración
-    problematic_cols = debug_data_issues(df, feature_cols)
     
-    if problematic_cols:
-        print("⚠️  Problemas detectados. Aplicando limpieza...")
-        df = clean_financial_data(df)  # <-- LLAMAR AQUÍ LA FUNCIÓN 6
-    
-    if Config.SCALER_TYPE == 'robust':
-        scaler_in = RobustScaler()
-        scaler_out = RobustScaler()
-    else:
-        scaler_in = StandardScaler()
-        scaler_out = StandardScaler()
-
-    # ==== SOLUCIÓN 3: Validación antes del escalado ====
-    print("🔍 Validando datos antes del escalado...")
-
-     # ==== SOLUCIÓN 4: Usar RobustScaler para outliers ====
-    # Opción A: RobustScaler (recomendado si hay outliers)
+    # Usar RobustScaler para outliers
     scaler_in = RobustScaler(quantile_range=(25, 75))
-    
-    # Opción B: StandardScaler con parámetros ajustados
-    # scaler_in = StandardScaler(with_mean=True, with_std=True)
-    
-    # Opción C: Combinación (escalar primero con Robust, luego con Standard)
-    # from sklearn.pipeline import Pipeline
-    # scaler_in = Pipeline([
-    #     ('robust', RobustScaler(quantile_range=(25, 75))),
-    #     ('standard', StandardScaler())
-    # ])
+    scaler_out = RobustScaler(quantile_range=(25, 75))
     
     print(f"📏 Usando scaler: {scaler_in.__class__.__name__}")
     
-    # 1. Verificar NaN
-    nan_check = df[feature_cols].isnull().sum()
-    if nan_check.any():
-        print("❌ ERROR: Se encontraron valores NaN:")
-        for col, count in nan_check[nan_check > 0].items():
-            print(f"   - {col}: {count} NaN")
-        raise ValueError("Datos contienen NaN. Revisa calculate_advanced_indicators()")
+    # ==== CORRECCIÓN: Validación antes del escalado ====
+    print("🔍 Validando datos antes del escalado...")
     
-    # 2. Verificar infinitos
-    inf_mask = np.isinf(df[feature_cols].values)
-    if inf_mask.any():
-        print("❌ ERROR: Se encontraron valores infinitos")
+    # Verificar que solo estamos usando columnas numéricas
+    for df_part in [df_train, df_val, df_test]:
+        for col in feature_cols:
+            if col not in df_part.select_dtypes(include=[np.number]).columns:
+                print(f"❌ ERROR: Columna {col} no es numérica o no existe")
+                raise ValueError(f"Columna {col} no es numérica")
+    
+    # 1. Verificar NaN solo en columnas numéricas
+    nan_check_train = df_train[feature_cols].isnull().sum()
+    if nan_check_train.any():
+        print("❌ ERROR: Se encontraron valores NaN en train:")
+        for col, count in nan_check_train[nan_check_train > 0].items():
+            print(f"   - {col}: {count} NaN")
+        raise ValueError("Datos train contienen NaN")
+    
+    # 2. Verificar infinitos solo en columnas numéricas
+    inf_mask_train = np.isinf(df_train[feature_cols].values)
+    if inf_mask_train.any():
+        print("❌ ERROR: Se encontraron valores infinitos en train")
         inf_cols = []
         for i, col in enumerate(feature_cols):
-            if inf_mask[:, i].any():
+            if inf_mask_train[:, i].any():
                 inf_cols.append(col)
         print(f"   Columnas con infinitos: {inf_cols}")
-        raise ValueError("Datos contienen valores infinitos")
+        raise ValueError("Datos train contienen valores infinitos")
     
     # 3. Verificar valores extremos
-    print("📊 Estadísticas de características:")
+    print("📊 Estadísticas de características (train):")
     for col in feature_cols:
-        col_min = df[col].min()
-        col_max = df[col].max()
-        col_mean = df[col].mean()
-        col_std = df[col].std()
+        col_min = df_train[col].min()
+        col_max = df_train[col].max()
+        col_mean = df_train[col].mean()
+        col_std = df_train[col].std()
         
         print(f"   {col}: min={col_min:.6f}, max={col_max:.6f}, "
               f"mean={col_mean:.6f}, std={col_std:.6f}")
@@ -519,18 +533,13 @@ def prepare_delta_dataset(df):
         # Detectar valores sospechosamente grandes
         if abs(col_max) > 1e6 or abs(col_min) > 1e6:
             print(f"   ⚠️  Advertencia: {col} tiene valores > 1e6")
-            # Opcional: recortar valores extremos
-            df[col] = np.clip(df[col], -1e6, 1e6)
-    
-    # 4. Verificar desviaciones estándar cercanas a cero
-    near_zero_std = [col for col in feature_cols if df[col].std() < 1e-10]
-    if near_zero_std:
-        print(f"⚠️  Advertencia: Columnas con std cercana a cero: {near_zero_std}")
-        print("   Considera eliminar estas columnas o revisar su cálculo")
+            # Recortar valores extremos
+            df_train[col] = np.clip(df_train[col], -1e6, 1e6)
+            df_val[col] = np.clip(df_val[col], -1e6, 1e6)
+            df_test[col] = np.clip(df_test[col], -1e6, 1e6)
     
     # Ahora proceder con el escalado
     print("✅ Validación completada. Aplicando escalado...")
-    X_train_scaled = scaler_in.fit_transform(X_train[feature_cols])
     
     # Fit en train
     X_train = scaler_in.fit_transform(df_train[feature_cols])
@@ -541,6 +550,26 @@ def prepare_delta_dataset(df):
     
     X_test = scaler_in.transform(df_test[feature_cols])
     y_test = scaler_out.transform(df_test[target_cols])
+    
+    # 7. Crear secuencias
+    def create_sequences(X, y, seq_len):
+        X_seq, y_seq = [], []
+        for i in range(seq_len, len(X)):
+            X_seq.append(X[i-seq_len:i])
+            y_seq.append(y[i-1])  # Target es la vela después de la secuencia
+        return np.array(X_seq), np.array(y_seq)
+    
+    print("\n🔄 Creando secuencias...")
+    X_train_seq, y_train_seq = create_sequences(X_train, y_train, Config.SEQ_LEN)
+    X_val_seq, y_val_seq = create_sequences(X_val, y_val, Config.SEQ_LEN)
+    X_test_seq, y_test_seq = create_sequences(X_test, y_test, Config.SEQ_LEN)
+    
+    print(f"✅ Train: X{X_train_seq.shape}, y{y_train_seq.shape}")
+    print(f"✅ Val:   X{X_val_seq.shape}, y{y_val_seq.shape}")
+    print(f"✅ Test:  X{X_test_seq.shape}, y{y_test_seq.shape}")
+    
+    return (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
+           scaler_in, scaler_out, feature_cols, target_cols
     
     # 7. Crear secuencias
     def create_sequences(X, y, seq_len):
@@ -664,18 +693,30 @@ def debug_data_issues(df, feature_cols):
     print("🔧 DIAGNÓSTICO DETALLADO DE DATOS")
     print("="*60)
     
-    # 1. Resumen general
+    # Filtrar solo columnas numéricas que existen en el DataFrame
+    available_feature_cols = [col for col in feature_cols if col in df.columns]
     print(f"📊 Resumen del DataFrame:")
     print(f"   - Filas totales: {len(df)}")
     print(f"   - Columnas totales: {len(df.columns)}")
-    print(f"   - Columnas de características: {len(feature_cols)}")
+    print(f"   - Columnas de características disponibles: {len(available_feature_cols)}/{len(feature_cols)}")
     
-    # 2. Verificar cada columna
+    # Columnas faltantes
+    missing_cols = [col for col in feature_cols if col not in df.columns]
+    if missing_cols:
+        print(f"⚠️  Columnas faltantes: {missing_cols}")
+    
+    # 2. Verificar cada columna disponible
     print(f"\n📈 Estadísticas por columna:")
     problematic_cols = []
     
-    for i, col in enumerate(feature_cols, 1):
+    for i, col in enumerate(available_feature_cols, 1):
         print(f"\n   {i:2d}. {col}:")
+        
+        # Verificar si es columna numérica
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            print(f"      ❌ No es numérica, tipo: {df[col].dtype}")
+            problematic_cols.append((col, 'Non-numeric'))
+            continue
         
         # Valores NaN
         nan_count = df[col].isnull().sum()
@@ -683,43 +724,58 @@ def debug_data_issues(df, feature_cols):
             print(f"      ❌ NaN: {nan_count}")
             problematic_cols.append((col, 'NaN'))
         
-        # Valores infinitos
-        inf_mask = np.isinf(df[col].values)
-        inf_count = inf_mask.sum()
-        if inf_count > 0:
-            print(f"      ❌ Infinitos: {inf_count}")
-            problematic_cols.append((col, 'Inf'))
+        # Valores infinitos (solo para numéricas)
+        try:
+            inf_mask = np.isinf(df[col].values)
+            inf_count = inf_mask.sum()
+            if inf_count > 0:
+                print(f"      ❌ Infinitos: {inf_count}")
+                problematic_cols.append((col, 'Inf'))
+        except TypeError:
+            print(f"      ⚠️  No se puede verificar infinitos (tipo: {df[col].dtype})")
+            problematic_cols.append((col, 'TypeError'))
         
         # Estadísticas básicas
         if nan_count == 0 and inf_count == 0:
-            print(f"      ✅ Min: {df[col].min():.6f}")
-            print(f"      ✅ Max: {df[col].max():.6f}")
-            print(f"      ✅ Media: {df[col].mean():.6f}")
-            print(f"      ✅ Std: {df[col].std():.6f}")
-            
-            # Detectar outliers (más de 5 std de la media)
-            mean = df[col].mean()
-            std = df[col].std()
-            if std > 0:
-                outliers = ((df[col] - mean).abs() > 5 * std).sum()
-                if outliers > 0:
-                    print(f"      ⚠️  Outliers (>5σ): {outliers}")
-                    problematic_cols.append((col, 'Outliers'))
+            try:
+                print(f"      ✅ Min: {df[col].min():.6f}")
+                print(f"      ✅ Max: {df[col].max():.6f}")
+                print(f"      ✅ Media: {df[col].mean():.6f}")
+                print(f"      ✅ Std: {df[col].std():.6f}")
+                
+                # Detectar outliers (más de 5 std de la media)
+                mean = df[col].mean()
+                std = df[col].std()
+                if std > 0:
+                    outliers = ((df[col] - mean).abs() > 5 * std).sum()
+                    if outliers > 0:
+                        print(f"      ⚠️  Outliers (>5σ): {outliers}")
+                        problematic_cols.append((col, 'Outliers'))
+            except TypeError:
+                print(f"      ⚠️  No se pueden calcular estadísticas (tipo: {df[col].dtype})")
     
     # 3. Identificar filas problemáticas
     print(f"\n🔍 Buscando filas problemáticas...")
     
-    # Filas con cualquier NaN
-    rows_with_nan = df[feature_cols].isnull().any(axis=1)
-    if rows_with_nan.any():
-        print(f"   Filas con NaN: {rows_with_nan.sum()}")
-        print("   Índices:", df[rows_with_nan].index.tolist()[:10])
+    # Usar solo columnas numéricas disponibles
+    numeric_available_cols = [col for col in available_feature_cols 
+                             if pd.api.types.is_numeric_dtype(df[col])]
     
-    # Filas con cualquier Inf
-    rows_with_inf = np.isinf(df[feature_cols].values).any(axis=1)
-    if rows_with_inf.any():
-        print(f"   Filas con Inf: {rows_with_inf.sum()}")
-        print("   Índices:", df[rows_with_inf].index.tolist()[:10])
+    if numeric_available_cols:
+        # Filas con cualquier NaN
+        rows_with_nan = df[numeric_available_cols].isnull().any(axis=1)
+        if rows_with_nan.any():
+            print(f"   Filas con NaN: {rows_with_nan.sum()}")
+            print("   Índices:", df[rows_with_nan].index.tolist()[:10])
+        
+        # Filas con cualquier Inf
+        try:
+            rows_with_inf = np.isinf(df[numeric_available_cols].values).any(axis=1)
+            if rows_with_inf.any():
+                print(f"   Filas con Inf: {rows_with_inf.sum()}")
+                print("   Índices:", df[rows_with_inf].index.tolist()[:10])
+        except TypeError:
+            print("   ⚠️  No se puede verificar infinitos en todas las columnas")
     
     # 4. Recomendaciones
     print(f"\n💡 RECOMENDACIONES:")
@@ -738,7 +794,6 @@ def debug_data_issues(df, feature_cols):
     print("="*60 + "\n")
     
     return problematic_cols
-
 # ================================
 # 🏋️ ENTRENAMIENTO
 # ================================
