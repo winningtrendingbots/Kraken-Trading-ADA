@@ -25,42 +25,42 @@ from tqdm.auto import tqdm
 import requests
 from datetime import datetime, timedelta
 import warnings
+
+from sklearn.preprocessing import MinMaxScaler
 warnings.filterwarnings('ignore')
 
 # ================================
 # 🎛️ CONFIGURACIÓN MEJORADA
 # ================================
+# ================================
+# 🎛️ CONFIGURACIÓN OPTIMIZADA
+# ================================
 class Config:
     # Características
-    USE_VOLUME = True               # ✅ Usar volumen como feature
-    USE_VOLUME_DERIVATIVES = True   # ✅ Incluir 1ra y 2da derivada del volumen
-    USE_VOLUME_INDICATORS = True    # ✅ Calcular OBV, VWAP, PVT
-    USE_PRICE_DERIVATIVES = True    # ✅ Derivadas de precio
+    USE_VOLUME = True
+    USE_VOLUME_DERIVATIVES = False  # Menos ruido
+    USE_VOLUME_INDICATORS = True
+    USE_PRICE_DERIVATIVES = False
     
     # Targets
-    PREDICT_DELTAS = True           # ✅ Predecir deltas (no absolutos)
-    PREDICT_VOLUME_DELTA = False    # ❌ NO predecir delta de volumen (problema de escala)
+    PREDICT_ABSOLUTE = True         # Precios absolutos
+    PREDICT_DELTAS = False
     
     # Normalización
-    SCALER_TYPE = 'robust'          # ✅ RobustScaler (menos sensible a outliers)
-    SCALE_BY_WINDOW = False         # ❌ Escalar globalmente
+    SCALER_TYPE = 'robust'
     
-    # Arquitectura LSTM
-    SEQ_LEN = 60                    # 60 velas (2.5 días en 1h)
-    HIDDEN_SIZE = 128               # Reducido para evitar overfitting
-    NUM_LAYERS = 2                  # Menos capas
-    DROPOUT = 0.3                  # Menor dropout
-    BIDIRECTIONAL = True            # ✅ LSTM bidireccional
+    # Arquitectura
+    SEQ_LEN = 30                    # Ventana más corta
+    HIDDEN_SIZE = 64                # Reducido
+    NUM_LAYERS = 2
+    DROPOUT = 0.3
     
     # Entrenamiento
-    BATCH_SIZE = 64
-    EPOCHS = 100  # Reducido para pruebas
-    LEARNING_RATE = 0.001  # Un poco más alto
-    WEIGHT_DECAY = 1e-4             # Regularización L2
-    PATIENCE = 12                   # Paciencia early stopping
-    
-    # Output
-    OUTPUT_SIZE = 3                 # Solo delta_high, delta_low, delta_close
+    BATCH_SIZE = 32
+    EPOCHS = 50
+    LEARNING_RATE = 0.001
+    WEIGHT_DECAY = 1e-4
+    PATIENCE = 10
     
     # Datos
     TRAIN_SIZE = 0.70
@@ -80,6 +80,34 @@ def send_telegram(msg):
         requests.post(url, data={'chat_id': CHAT_ID, 'text': msg, 'parse_mode': 'Markdown'}, timeout=10)
     except Exception as e:
         print(f"❌ Telegram: {e}")
+
+# ================================
+# 📊 PREPARACIÓN DE DATOS MEJORADA
+# ================================
+def calculate_basic_indicators(df):
+    """Indicadores básicos y confiables"""
+    df = df.copy()
+    
+    # Volumen
+    df['volume_ma'] = df['volume'].rolling(window=20).mean()
+    df['volume_ratio'] = df['volume'] / df['volume_ma']
+    
+    # Precio
+    df['returns'] = df['close'].pct_change()
+    df['volatility'] = df['returns'].rolling(window=20).std()
+    
+    # RSI simple
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / (loss + 1e-10)
+    df['rsi'] = 100 - (100 / (1 + rs))
+    
+    # Rellenar NaN
+    df.fillna(method='bfill', inplace=True)
+    df.fillna(0, inplace=True)
+    
+    return df
 
 # ================================
 # 📊 INDICADORES AVANZADOS
@@ -212,77 +240,40 @@ def calculate_advanced_indicators(df):
     return df
 
 # ================================
-# 🧠 MODELO LSTM HÍBRIDO
+# 🧠 MODELO SIMPLIFICADO
 # ================================
-class HybridLSTM(nn.Module):
-    """
-    LSTM bidireccional con atención y skip connections
-    """
-    def __init__(self, input_size, hidden_size, num_layers, output_size, dropout=0.25, bidirectional=True):
+class PricePredictorLSTM(nn.Module):
+    def __init__(self, input_size, hidden_size=64, num_layers=2, output_size=3, dropout=0.3):
         super().__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.bidirectional = bidirectional
-        self.num_directions = 2 if bidirectional else 1
         
-        # LSTM bidireccional
         self.lstm = nn.LSTM(
             input_size, hidden_size, num_layers,
-            batch_first=True, 
-            dropout=dropout if num_layers > 1 else 0,
-            bidirectional=bidirectional
+            batch_first=True, dropout=dropout
         )
         
-        # Capa de atención
         self.attention = nn.Sequential(
-            nn.Linear(hidden_size * self.num_directions, hidden_size),
+            nn.Linear(hidden_size, hidden_size),
             nn.Tanh(),
             nn.Linear(hidden_size, 1)
         )
         
-        # Capas fully connected
-        fc_input_size = hidden_size * self.num_directions
-        
-        self.fc_layers = nn.Sequential(
-            nn.Linear(fc_input_size, fc_input_size // 2),
-            nn.BatchNorm1d(fc_input_size // 2),
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
             nn.Dropout(dropout),
-            
-            nn.Linear(fc_input_size // 2, fc_input_size // 4),
-            nn.BatchNorm1d(fc_input_size // 4),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            
-            nn.Linear(fc_input_size // 4, output_size)
+            nn.Linear(hidden_size // 2, output_size)
         )
-        
-        # Inicialización de pesos
-        self.init_weights()
-    
-    def init_weights(self):
-        for name, param in self.lstm.named_parameters():
-            if 'weight' in name:
-                nn.init.orthogonal_(param)
-            elif 'bias' in name:
-                nn.init.constant_(param, 0)
-        
-        for layer in self.fc_layers:
-            if isinstance(layer, nn.Linear):
-                nn.init.kaiming_normal_(layer.weight, mode='fan_in', nonlinearity='relu')
-                nn.init.constant_(layer.bias, 0)
     
     def forward(self, x):
         # LSTM
-        lstm_out, (hidden, cell) = self.lstm(x)  # [batch, seq_len, hidden*directions]
+        lstm_out, _ = self.lstm(x)
         
-        # Atención
-        attention_weights = torch.softmax(self.attention(lstm_out), dim=1)
-        context = torch.sum(attention_weights * lstm_out, dim=1)
+        # Atención simple
+        attn_weights = torch.softmax(self.attention(lstm_out), dim=1)
+        context = torch.sum(attn_weights * lstm_out, dim=1)
         
-        # Fully connected
-        output = self.fc_layers(context)
-        return output
+        # Salida
+        return self.fc(context)
 
 class CoherentDeltaLoss(nn.Module):
     """
@@ -383,6 +374,74 @@ def download_and_prepare_data(symbol="ADA-USD", interval='1h', path='ADAUSD_1h_d
     df.to_csv(path, index=False)
     print(f"✅ Datos guardados: {len(df):,} velas")
     return df
+
+def prepare_improved_dataset(df):
+    """Dataset mejorado con targets absolutos"""
+    print("\n" + "="*70)
+    print("  🔧 PREPARACIÓN MEJORADA DE DATOS")
+    print("="*70)
+    
+    # 1. Indicadores básicos
+    df = calculate_basic_indicators(df)
+    
+    # 2. Targets: precios absolutos de la próxima vela
+    df['high_next'] = df['high'].shift(-1)
+    df['low_next'] = df['low'].shift(-1)
+    df['close_next'] = df['close'].shift(-1)
+    
+    # 3. Features básicas
+    basic_cols = ['open', 'high', 'low', 'close', 'volume']
+    indicator_cols = ['volume_ma', 'volume_ratio', 'returns', 'volatility', 'rsi']
+    
+    feature_cols = basic_cols + indicator_cols
+    target_cols = ['high_next', 'low_next', 'close_next']
+    
+    # 4. Eliminar NaN
+    df = df.dropna()
+    print(f"📊 Datos totales: {len(df):,} velas")
+    
+    # 5. Dividir temporalmente
+    train_size = Config.TRAIN_SIZE
+    val_size = Config.VAL_SIZE
+    
+    train_end = int(len(df) * train_size)
+    val_end = int(len(df) * (train_size + val_size))
+    
+    df_train = df.iloc[:train_end].copy()
+    df_val = df.iloc[train_end:val_end].copy()
+    df_test = df.iloc[val_end:].copy()
+    
+    # 6. Normalización separada
+    scaler_in = RobustScaler()
+    scaler_out = MinMaxScaler()
+    
+    X_train = scaler_in.fit_transform(df_train[feature_cols])
+    X_val = scaler_in.transform(df_val[feature_cols])
+    X_test = scaler_in.transform(df_test[feature_cols])
+    
+    y_train = scaler_out.fit_transform(df_train[target_cols])
+    y_val = scaler_out.transform(df_val[target_cols])
+    y_test = scaler_out.transform(df_test[target_cols])
+    
+    # 7. Crear secuencias
+    def create_sequences(X, y, seq_len):
+        X_seq, y_seq = [], []
+        for i in range(seq_len, len(X)):
+            X_seq.append(X[i-seq_len:i])
+            y_seq.append(y[i])
+        return np.array(X_seq), np.array(y_seq)
+    
+    X_train_seq, y_train_seq = create_sequences(X_train, y_train, Config.SEQ_LEN)
+    X_val_seq, y_val_seq = create_sequences(X_val, y_val, Config.SEQ_LEN)
+    X_test_seq, y_test_seq = create_sequences(X_test, y_test, Config.SEQ_LEN)
+    
+    print(f"\n📊 Conjuntos de datos:")
+    print(f"   Train: X{X_train_seq.shape}, y{y_train_seq.shape}")
+    print(f"   Val:   X{X_val_seq.shape}, y{y_val_seq.shape}")
+    print(f"   Test:  X{X_test_seq.shape}, y{y_test_seq.shape}")
+    
+    return (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
+           scaler_in, scaler_out, feature_cols, target_cols
 
 def prepare_delta_dataset(df):
     """
@@ -567,6 +626,74 @@ def prepare_delta_dataset(df):
     print(f"✅ Train: X{X_train_seq.shape}, y{y_train_seq.shape}")
     print(f"✅ Val:   X{X_val_seq.shape}, y{y_val_seq.shape}")
     print(f"✅ Test:  X{X_test_seq.shape}, y{y_test_seq.shape}")
+    
+    return (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
+           scaler_in, scaler_out, feature_cols, target_cols
+
+def prepare_improved_dataset(df):
+    """Dataset mejorado con targets absolutos"""
+    print("\n" + "="*70)
+    print("  🔧 PREPARACIÓN MEJORADA DE DATOS")
+    print("="*70)
+    
+    # 1. Indicadores básicos
+    df = calculate_basic_indicators(df)
+    
+    # 2. Targets: precios absolutos de la próxima vela
+    df['high_next'] = df['high'].shift(-1)
+    df['low_next'] = df['low'].shift(-1)
+    df['close_next'] = df['close'].shift(-1)
+    
+    # 3. Features básicas
+    basic_cols = ['open', 'high', 'low', 'close', 'volume']
+    indicator_cols = ['volume_ma', 'volume_ratio', 'returns', 'volatility', 'rsi']
+    
+    feature_cols = basic_cols + indicator_cols
+    target_cols = ['high_next', 'low_next', 'close_next']
+    
+    # 4. Eliminar NaN
+    df = df.dropna()
+    print(f"📊 Datos totales: {len(df):,} velas")
+    
+    # 5. Dividir temporalmente
+    train_size = Config.TRAIN_SIZE
+    val_size = Config.VAL_SIZE
+    
+    train_end = int(len(df) * train_size)
+    val_end = int(len(df) * (train_size + val_size))
+    
+    df_train = df.iloc[:train_end].copy()
+    df_val = df.iloc[train_end:val_end].copy()
+    df_test = df.iloc[val_end:].copy()
+    
+    # 6. Normalización separada
+    scaler_in = RobustScaler()
+    scaler_out = MinMaxScaler()
+    
+    X_train = scaler_in.fit_transform(df_train[feature_cols])
+    X_val = scaler_in.transform(df_val[feature_cols])
+    X_test = scaler_in.transform(df_test[feature_cols])
+    
+    y_train = scaler_out.fit_transform(df_train[target_cols])
+    y_val = scaler_out.transform(df_val[target_cols])
+    y_test = scaler_out.transform(df_test[target_cols])
+    
+    # 7. Crear secuencias
+    def create_sequences(X, y, seq_len):
+        X_seq, y_seq = [], []
+        for i in range(seq_len, len(X)):
+            X_seq.append(X[i-seq_len:i])
+            y_seq.append(y[i])
+        return np.array(X_seq), np.array(y_seq)
+    
+    X_train_seq, y_train_seq = create_sequences(X_train, y_train, Config.SEQ_LEN)
+    X_val_seq, y_val_seq = create_sequences(X_val, y_val, Config.SEQ_LEN)
+    X_test_seq, y_test_seq = create_sequences(X_test, y_test, Config.SEQ_LEN)
+    
+    print(f"\n📊 Conjuntos de datos:")
+    print(f"   Train: X{X_train_seq.shape}, y{y_train_seq.shape}")
+    print(f"   Val:   X{X_val_seq.shape}, y{y_val_seq.shape}")
+    print(f"   Test:  X{X_test_seq.shape}, y{y_test_seq.shape}")
     
     return (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
            scaler_in, scaler_out, feature_cols, target_cols
@@ -909,6 +1036,130 @@ def train_model(model, train_loader, val_loader, device):
     return train_losses, val_losses
 
 # ================================
+# 🏋️ ENTRENAMIENTO OPTIMIZADO
+# ================================
+def train_improved_model(model, train_loader, val_loader, device):
+    print("\n" + "="*70)
+    print("  🏋️ ENTRENAMIENTO OPTIMIZADO")
+    print("="*70)
+    
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+    
+    train_losses, val_losses = [], []
+    best_val_loss = float('inf')
+    
+    for epoch in range(Config.EPOCHS):
+        # Entrenamiento
+        model.train()
+        train_loss = 0
+        for X_batch, y_batch in train_loader:
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            
+            optimizer.zero_grad()
+            predictions = model(X_batch)
+            loss = criterion(predictions, y_batch)
+            
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            
+            train_loss += loss.item()
+        
+        train_loss /= len(train_loader)
+        train_losses.append(train_loss)
+        
+        # Validación
+        model.eval()
+        val_loss = 0
+        with torch.no_grad():
+            for X_batch, y_batch in val_loader:
+                X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+                predictions = model(X_batch)
+                loss = criterion(predictions, y_batch)
+                val_loss += loss.item()
+        
+        val_loss /= len(val_loader)
+        val_losses.append(val_loss)
+        
+        # Scheduler
+        scheduler.step(val_loss)
+        
+        # Log
+        if (epoch + 1) % 5 == 0:
+            current_lr = optimizer.param_groups[0]['lr']
+            print(f"\nEpoch {epoch+1}/{Config.EPOCHS}")
+            print(f"  LR: {current_lr:.6f}")
+            print(f"  Train Loss: {train_loss:.6f}")
+            print(f"  Val Loss:   {val_loss:.6f}")
+            print(f"  Best Val:   {best_val_loss:.6f}")
+        
+        # Guardar mejor modelo
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), 'best_model.pth')
+    
+    return train_losses, val_losses
+
+# ================================
+# 📈 EVALUACIÓN MEJORADA
+# ================================
+def evaluate_improved_model(model, test_loader, scaler_out, close_prices, device):
+    print("\n" + "="*70)
+    print("  📊 EVALUACIÓN MEJORADA")
+    print("="*70)
+    
+    model.eval()
+    predictions, targets = [], []
+    
+    with torch.no_grad():
+        for X_batch, y_batch in test_loader:
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            pred = model(X_batch)
+            predictions.extend(pred.cpu().numpy())
+            targets.extend(y_batch.cpu().numpy())
+    
+    predictions = np.array(predictions)
+    targets = np.array(targets)
+    
+    # Desnormalizar
+    predictions_abs = scaler_out.inverse_transform(predictions)
+    targets_abs = scaler_out.inverse_transform(targets)
+    
+    # Calcular deltas
+    predictions_delta = (predictions_abs - close_prices) / close_prices
+    targets_delta = (targets_abs - close_prices) / close_prices
+    
+    # Métricas
+    metrics = {}
+    for i, name in enumerate(['delta_high', 'delta_low', 'delta_close']):
+        mae = mean_absolute_error(targets_delta[:, i], predictions_delta[:, i])
+        rmse = np.sqrt(mean_squared_error(targets_delta[:, i], predictions_delta[:, i]))
+        r2 = r2_score(targets_delta[:, i], predictions_delta[:, i])
+        
+        # Accuracy direccional
+        direction_true = np.sign(targets_delta[:, i])
+        direction_pred = np.sign(predictions_delta[:, i])
+        accuracy = np.mean(direction_true == direction_pred) * 100
+        
+        metrics[name] = {
+            'MAE': float(mae),
+            'RMSE': float(rmse),
+            'R2': float(r2),
+            'Direction_Accuracy': float(accuracy)
+        }
+        
+        print(f"\n📊 {name}:")
+        print(f"   MAE:  {mae:.6f}")
+        print(f"   RMSE: {rmse:.6f}")
+        print(f"   R²:   {r2:.4f}")
+        print(f"   Accuracy Direccional: {accuracy:.2f}%")
+    
+    return predictions_abs, targets_abs, metrics
+
+
+# ================================
 # 📊 EVALUACIÓN
 # ================================
 def evaluate_model(model, test_loader, scaler_out, target_cols, device):
@@ -1050,20 +1301,21 @@ def plot_training_history(train_losses, val_losses, metrics, predictions, target
 # ================================
 # 🚀 MAIN
 # ================================
+# ================================
+# 🚀 MAIN MEJORADO
+# ================================
 def main():
     try:
         print("\n" + "="*70)
-        print("  🔥 LSTM HÍBRIDO CON DELTAS Y VOLUMEN MEJORADO")
+        print("  🚀 LSTM OPTIMIZADO PARA ADAUSD")
         print("="*70)
         
-        print("\n⚙️  CONFIGURACIÓN:")
+        # Configuración
+        print("\n⚙️  CONFIGURACIÓN OPTIMIZADA:")
         print(f"   Sequence Length: {Config.SEQ_LEN}")
         print(f"   Hidden Size: {Config.HIDDEN_SIZE}")
         print(f"   Layers: {Config.NUM_LAYERS}")
-        print(f"   Bidirectional: {Config.BIDIRECTIONAL}")
         print(f"   Dropout: {Config.DROPOUT}")
-        print(f"   Use Volume Indicators: {Config.USE_VOLUME_INDICATORS}")
-        print(f"   Use Volume Derivatives: {Config.USE_VOLUME_DERIVATIVES}")
         
         # Device
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -1071,30 +1323,27 @@ def main():
         
         # 1. Descargar datos
         df = download_and_prepare_data(symbol="ADA-USD", interval='1h')
-
-        # Aplicar limpieza desde el principio
-        df = clean_financial_data(df, max_abs_value=1e6, fill_method='ffill')
         
-        # ==== CORRECCIÓN: Eliminar esta línea duplicada ====
-        # scaler_in, scaler_out, feature_cols, target_cols = prepare_delta_dataset(df)
-        # ^^^^ ESTA LÍNEA ESTÁ CAUSANDO EL ERROR ^^^^
-        
-        # 2. Preparar dataset - La función retorna 7 valores, no 4
+        # 2. Preparar dataset mejorado
         (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
-        scaler_in, scaler_out, feature_cols, target_cols = prepare_delta_dataset(df)
+        scaler_in, scaler_out, feature_cols, target_cols = prepare_improved_dataset(df)
         
         input_size = len(feature_cols)
         output_size = len(target_cols)
         
-        print(f"\n📊 Dimensiones finales:")
-        print(f"   Input size: {input_size}")
-        print(f"   Output size: {output_size}")
-        print(f"   Total parámetros estimados: ~{(input_size * Config.HIDDEN_SIZE * 4 + Config.HIDDEN_SIZE * output_size) / 1e6:.2f}M")
-        
-        # 3. Crear dataloaders
-        train_dataset = ForexDataset(X_train_seq, y_train_seq)
-        val_dataset = ForexDataset(X_val_seq, y_val_seq)
-        test_dataset = ForexDataset(X_test_seq, y_test_seq)
+        # 3. Dataloaders
+        train_dataset = torch.utils.data.TensorDataset(
+            torch.FloatTensor(X_train_seq), 
+            torch.FloatTensor(y_train_seq)
+        )
+        val_dataset = torch.utils.data.TensorDataset(
+            torch.FloatTensor(X_val_seq), 
+            torch.FloatTensor(y_val_seq)
+        )
+        test_dataset = torch.utils.data.TensorDataset(
+            torch.FloatTensor(X_test_seq), 
+            torch.FloatTensor(y_test_seq)
+        )
         
         train_loader = torch.utils.data.DataLoader(
             train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True
@@ -1106,126 +1355,31 @@ def main():
             test_dataset, batch_size=Config.BATCH_SIZE, shuffle=False
         )
         
-        # 4. Crear modelo
-        model = HybridLSTM(
+        # 4. Modelo
+        model = PricePredictorLSTM(
             input_size=input_size,
             hidden_size=Config.HIDDEN_SIZE,
             num_layers=Config.NUM_LAYERS,
             output_size=output_size,
-            dropout=Config.DROPOUT,
-            bidirectional=Config.BIDIRECTIONAL
+            dropout=Config.DROPOUT
         ).to(device)
-        
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        
-        print(f"\n🧠 Modelo creado:")
-        print(f"   Total parámetros: {total_params:,}")
-        print(f"   Parámetros entrenables: {trainable_params:,}")
         
         # 5. Entrenar
         start_time = time.time()
-        train_losses, val_losses = train_model(model, train_loader, val_loader, device)
+        train_losses, val_losses = train_improved_model(model, train_loader, val_loader, device)
         training_time = time.time() - start_time
         
         # 6. Evaluar
-        predictions, targets, metrics = evaluate_model(
-            model, test_loader, scaler_out, target_cols, device
+        predictions, targets, metrics = evaluate_improved_model(
+            model, test_loader, scaler_out, close_prices, device
         )
         
-        # 7. Graficar
-        plot_training_history(train_losses, val_losses, metrics, predictions, targets)
-        
-        # 8. Guardar modelo
-        model_dir = 'ADAUSD_MODELS'
-        os.makedirs(model_dir, exist_ok=True)
-        
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'config': {
-                'input_size': input_size,
-                'hidden_size': Config.HIDDEN_SIZE,
-                'num_layers': Config.NUM_LAYERS,
-                'output_size': output_size,
-                'seq_len': Config.SEQ_LEN,
-                'bidirectional': Config.BIDIRECTIONAL,
-                'dropout': Config.DROPOUT,
-                'feature_cols': feature_cols,
-                'target_cols': target_cols
-            },
-            'metrics_test': metrics,
-            'scaler_in': scaler_in,
-            'scaler_out': scaler_out
-        }, f'{model_dir}/adausd_hybrid_lstm.pth')
-        
-        joblib.dump(scaler_in, f'{model_dir}/scaler_input_hybrid.pkl')
-        joblib.dump(scaler_out, f'{model_dir}/scaler_output_hybrid.pkl')
-        
-        with open(f'{model_dir}/config_hybrid.json', 'w') as f:
-            json.dump({
-                'input_size': input_size,
-                'output_size': output_size,
-                'seq_len': Config.SEQ_LEN,
-                'hidden_size': Config.HIDDEN_SIZE,
-                'num_layers': Config.NUM_LAYERS,
-                'bidirectional': Config.BIDIRECTIONAL,
-                'dropout': Config.DROPOUT,
-                'feature_cols': feature_cols,
-                'target_cols': target_cols,
-                'metrics_test': metrics,
-                'training_time_minutes': training_time / 60,
-                'total_params': total_params,
-                'trainable_params': trainable_params,
-                'timestamp': datetime.now().isoformat()
-            }, f, indent=2)
-        
-        # 9. Telegram summary
-        avg_r2 = np.mean([metrics[t]['R2'] for t in target_cols])
-        avg_mae = np.mean([metrics[t]['MAE'] for t in target_cols])
-        
-        msg = f"""✅ *MODELO HÍBRIDO ENTRENADO*
-
-⏱️ Tiempo: {training_time/60:.1f} min
-🧠 Parámetros: {total_params:,}
-
-📊 *Métricas Promedio:*
-   • R²: {avg_r2:.4f}
-   • MAE: {avg_mae:.6f}
-
-🎯 *Features ({input_size}):*
-   • OHLCV: ✅
-   • Indicadores volumen: {'✅' if Config.USE_VOLUME_INDICATORS else '❌'}
-   • Derivadas volumen: {'✅' if Config.USE_VOLUME_DERIVATIVES else '❌'}
-   • Divergencias: ✅
-
-📈 *Targets ({output_size}):*
-   • delta_high: R²={metrics['delta_high']['R2']:.4f}
-   • delta_low: R²={metrics['delta_low']['R2']:.4f}
-   • delta_close: R²={metrics['delta_close']['R2']:.4f}
-
-🔥 *Modelo:*
-   • LSTM Bidireccional
-   • Atención
-   • Skip Connections
-   • Regularización L2
-
-✅ *Anclaje garantizado a precio actual*
-"""
-        
-        print("\n" + "="*70)
-        print("  ✅✅✅ ENTRENAMIENTO COMPLETADO ✅✅✅")
-        print("="*70)
-        print(msg.replace('*', ''))
-        
-        send_telegram(msg)
+        print(f"\n✅ Entrenamiento completado en {training_time/60:.1f} minutos")
         
     except Exception as e:
-        error_msg = f"❌ Error en entrenamiento: {str(e)}"
-        print(error_msg)
+        print(f"\n❌ Error: {str(e)}")
         import traceback
         traceback.print_exc()
-        send_telegram(error_msg)
-        raise
 
 if __name__ == "__main__":
     main()
