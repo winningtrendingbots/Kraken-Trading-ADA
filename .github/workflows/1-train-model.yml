@@ -2,7 +2,7 @@ name: 🤖  Train Robust AI Model
 
 on:
   schedule:
-    - cron: '0 */12 * * *' # Entrenar cada 12 horas es suficiente para LSTM
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -12,8 +12,8 @@ jobs:
   train:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -23,13 +23,12 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: |
-          pip install pandas numpy yfinance tensorflow scikit-learn requests joblib
+        run: pip install pandas numpy torch yfinance requests joblib
 
-      - name: Run Training
+      - name: Train LSTM model
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_API }}
-          TELEGRAM_CHAT_ID: ${{ secrets.CHAT_ID }}
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python adausd_lstm_5min.py
 
       - name: Commit and Push
@@ -37,16 +36,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 1. Asegurar sincronización
-          git pull origin main --rebase || echo "Nada que pullear"
-
-          # 2. Agregar archivos clave
-          git add ADAUSD_MODELS/ ADAUSD_1h_data.csv training_loss.png
+          # SINCRONIZACIÓN CRÍTICA
+          git pull origin main --rebase
           
-          # 3. Commit seguro
+          git add ADAUSD_MODELS/ ADAUSD_1h_data.csv latest_pred.json 2>/dev/null || true
+          
           if git diff --staged --quiet; then
-            echo "No hay cambios en el modelo."
+            echo "Sin cambios"
           else
-            git commit -m "🧠 Model Retrained $(date -u +%Y-%m-%d)"
+            git commit -m "Model trained $(date -u +%Y-%m-%d)"
             git push origin main
           fi
