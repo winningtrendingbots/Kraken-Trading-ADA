@@ -8,12 +8,11 @@ scikit-learn>=1.3.0
 
 # Data fetching
 yfinance>=0.2.28
+requests>=2.31.0
 
 # Visualization
 matplotlib>=3.7.0
-
-# HTTP requests
-requests>=2.31.0
+seaborn>=0.12.0
 
 # Model persistence
 joblib>=1.3.0
@@ -21,5 +20,11 @@ joblib>=1.3.0
 # Progress bars
 tqdm>=4.66.0
 
-# Task scheduling (solo para local, no necesario en GitHub Actions)
-schedule>=1.2.0
+# Technical Analysis
+ta>=0.10.0
+
+# Data manipulation
+scipy>=1.10.0
+
+# Logging
+loguru>=0.7.0
