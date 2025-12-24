@@ -49,15 +49,15 @@ class Config:
     SEQ_LEN = 60                    # 60 velas (2.5 días en 1h)
     HIDDEN_SIZE = 128               # Reducido para evitar overfitting
     NUM_LAYERS = 2                  # Menos capas
-    DROPOUT = 0.25                  # Menor dropout
+    DROPOUT = 0.3                  # Menor dropout
     BIDIRECTIONAL = True            # ✅ LSTM bidireccional
     
     # Entrenamiento
-    BATCH_SIZE = 64                 # Batch más pequeño
-    EPOCHS = 120                    # Más épocas
-    LEARNING_RATE = 0.0008          # Learning rate más bajo
-    WEIGHT_DECAY = 1e-5             # Regularización L2
-    PATIENCE = 15                   # Paciencia early stopping
+    BATCH_SIZE = 64
+    EPOCHS = 100  # Reducido para pruebas
+    LEARNING_RATE = 0.001  # Un poco más alto
+    WEIGHT_DECAY = 1e-4             # Regularización L2
+    PATIENCE = 12                   # Paciencia early stopping
     
     # Output
     OUTPUT_SIZE = 3                 # Solo delta_high, delta_low, delta_close
@@ -807,6 +807,9 @@ class EarlyStopping:
             self.best_loss = val_loss
             self.counter = 0
 
+# ================================
+# 🏋️ ENTRENAMIENTO - VERSIÓN CORREGIDA
+# ================================
 def train_model(model, train_loader, val_loader, device):
     """Entrena el modelo con early stopping"""
     print("\n" + "="*70)
@@ -825,8 +828,10 @@ def train_model(model, train_loader, val_loader, device):
         weight_decay=Config.WEIGHT_DECAY
     )
     
+    # 🔥 CORRECCIÓN: Eliminar 'verbose' - no compatible con todas las versiones
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=5, verbose=True
+        optimizer, mode='min', factor=0.5, patience=5
+        # ❌ ELIMINADO: verbose=True
     )
     
     early_stopping = EarlyStopping(patience=Config.PATIENCE)
@@ -873,22 +878,25 @@ def train_model(model, train_loader, val_loader, device):
             best_val_loss = val_loss
             best_model_state = model.state_dict().copy()
             torch.save(model.state_dict(), 'best_model_temp.pth')
+            print(f"\n💾 Mejor modelo guardado (val loss: {val_loss:.6f})")
         
         # Actualizar scheduler
         scheduler.step(val_loss)
+        
+        # Mostrar LR actual cada 10 épocas
+        if (epoch + 1) % 10 == 0:
+            current_lr = optimizer.param_groups[0]['lr']
+            print(f"\n📊 Epoch {epoch+1}/{Config.EPOCHS}")
+            print(f"  LR actual: {current_lr:.6f}")
+            print(f"  Train Loss: {train_loss:.6f}")
+            print(f"  Val Loss:   {val_loss:.6f}")
+            print(f"  Best Val:   {best_val_loss:.6f}")
         
         # Early stopping
         early_stopping(val_loss)
         if early_stopping.early_stop:
             print(f"\n🛑 Early stopping en epoch {epoch+1}")
             break
-        
-        # Log cada 10 épocas
-        if (epoch + 1) % 10 == 0:
-            print(f"\nEpoch {epoch+1}/{Config.EPOCHS}")
-            print(f"  Train Loss: {train_loss:.6f}")
-            print(f"  Val Loss:   {val_loss:.6f}")
-            print(f"  Best Val:   {best_val_loss:.6f}")
     
     # Cargar mejor modelo
     if best_model_state:
@@ -896,6 +904,7 @@ def train_model(model, train_loader, val_loader, device):
     
     print(f"\n✅ Entrenamiento completado")
     print(f"   Mejor val loss: {best_val_loss:.6f}")
+    print(f"   Épocas totales: {len(train_losses)}")
     
     return train_losses, val_losses
 
