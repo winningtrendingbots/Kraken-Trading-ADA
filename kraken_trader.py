@@ -33,7 +33,10 @@ OPEN_ORDERS_FILE = 'open_orders.json'
 
 # 🆕 Configuración de tolerancia
 MAX_PRICE_DRIFT_PCT = 3.0  # Máximo 3% de diferencia entre precio base y actual
-PREDICTION_MAX_AGE_MINUTES = 10  # Predicciones válidas por 90 minutos
+PREDICTION_MAX_AGE_MINUTES = 10  # Antes 60, ahora 10 minutos
+
+# Añadir validación de tiempo mínimo entre señales
+MIN_SIGNAL_INTERVAL_SECONDS = 240  # 4 minutos mínimo entre señales
 
 def send_telegram(msg):
     """Envía mensaje a Telegram"""
