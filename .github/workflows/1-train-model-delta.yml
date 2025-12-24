@@ -75,15 +75,16 @@ jobs:
         run: |
           echo ""
           echo "🔥 ============================================"
-          echo "   ENTRENANDO MODELO LSTM HÍBRIDO"
+          echo "   ENTRENANDO MODELO LSTM HÍBRIDO OPTIMIZADO"
           echo "============================================"
           echo ""
-          echo "✨ Características:"
-          echo "   • LSTM Bidireccional con Atención"
-          echo "   • Derivadas de volumen (1ra y 2da)"
-          echo "   • Indicadores OBV, VWAP, PVT"
-          echo "   • Divergencias precio-volumen"
-          echo "   • Pérdida personalizada con coherencia"
+          echo "✨ Mejoras aplicadas:"
+          echo "   • SEQ_LEN: 60 (más contexto)"
+          echo "   • Hidden: 64 (menos overfitting)"
+          echo "   • Dropout: 0.4 (más regularización)"
+          echo "   • Batch: 128 (más estable)"
+          echo "   • LR: 0.0005 (convergencia suave)"
+          echo "   • Early stopping mejorado"
           echo ""
           
           python adausd_lstm_5min_delta.py
@@ -103,38 +104,40 @@ jobs:
             echo ""
             echo "📊 MÉTRICAS DEL MODELO:"
             python3 << 'PYEOF'
-            import json
-            try:
-                with open('ADAUSD_MODELS/config_hybrid.json', 'r') as f:
-                    config = json.load(f)
-                
-                metrics = config.get('metrics_test', {})
-                
-                print("   Target          R²        MAE")
-                print("   ---------------------------------")
-                
-                for target, data in metrics.items():
-                    r2 = data.get('R2', 0)
-                    mae = data.get('MAE', 0)
-                    print(f"   {target:12} {r2:8.4f}   {mae:8.6f}")
-                
-                # Validación de calidad
-                avg_r2 = sum(m['R2'] for m in metrics.values()) / len(metrics)
-                print(f"\n   📈 R² promedio: {avg_r2:.4f}")
-                
-                if avg_r2 < 0.3:
-                    print("   ⚠️  R² bajo - considerar reentrenamiento")
-                elif avg_r2 < 0.5:
-                    print("   ✅ R² aceptable")
-                else:
-                    print("   🎉 R² excelente")
-                    
-            except Exception as e:
-                print(f"   Error: {e}")
-            PYEOF
-                    else
-                      echo "❌ No se encontró config_hybrid.json"
-                    fi
+import json
+try:
+    with open('ADAUSD_MODELS/config_hybrid.json', 'r') as f:
+        config = json.load(f)
+    
+    metrics = config.get('metrics_test', {})
+    
+    if metrics:
+        print("   Target          R²        MAE")
+        print("   ---------------------------------")
+        
+        for target, data in metrics.items():
+            r2 = data.get('R2', 0)
+            mae = data.get('MAE', 0)
+            print(f"   {target:12} {r2:8.4f}   {mae:8.6f}")
+        
+        # Validación de calidad
+        avg_r2 = sum(m['R2'] for m in metrics.values()) / len(metrics)
+        print(f"\n   📈 R² promedio: {avg_r2:.4f}")
+        
+        if avg_r2 < 0:
+            print("   ⚠️  R² negativo - modelo no converge")
+        elif avg_r2 < 0.3:
+            print("   ⚠️  R² bajo - considerar ajustar hiperparámetros")
+        elif avg_r2 < 0.5:
+            print("   ✅ R² aceptable")
+        else:
+            print("   🎉 R² excelente")
+except Exception as e:
+    print(f"   Error: {e}")
+PYEOF
+          else
+            echo "❌ No se encontró config_hybrid.json"
+          fi
       
       - name: 💾 Commit trained model
         if: steps.check.outputs.should_train == 'true'
@@ -157,7 +160,7 @@ jobs:
             git diff --staged --name-only
             
             TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
-            git commit -m "🤖 Hybrid Model trained: $TIMESTAMP"
+            git commit -m "🤖 Hybrid Model trained (optimized): $TIMESTAMP"
             
             # Push con retry
             MAX_RETRIES=3
@@ -183,35 +186,44 @@ jobs:
         if: always()
         run: |
           echo ""
-          echo "══════════════════════════════════════════════════════════════════════"
+          echo "╔═══════════════════════════════════════════════════════════════════╗"
           if [ "${{ steps.check.outputs.should_train }}" = "true" ]; then
-            echo "  ✅ MODELO HÍBRIDO ENTRENADO"
+            echo "  ✅ MODELO HÍBRIDO OPTIMIZADO ENTRENADO"
             echo ""
             echo "📁 Archivos generados:"
             [ -f "ADAUSD_MODELS/adausd_hybrid_lstm.pth" ] && echo "   ✅ adausd_hybrid_lstm.pth" || echo "   ❌ adausd_hybrid_lstm.pth"
             [ -f "ADAUSD_MODELS/config_hybrid.json" ] && echo "   ✅ config_hybrid.json" || echo "   ❌ config_hybrid.json"
             [ -f "adausd_hybrid_results.png" ] && echo "   ✅ adausd_hybrid_results.png" || echo "   ⚠️ adausd_hybrid_results.png"
             
-            # Mostrar métricas si existen
+            # Mostrar métricas finales
             if [ -f "ADAUSD_MODELS/config_hybrid.json" ]; then
               echo ""
               echo "📊 Resumen de métricas:"
               python3 << 'PYEOF'
-              import json
-              try:
-                  with open('ADAUSD_MODELS/config_hybrid.json', 'r') as f:
-                      config = json.load(f)
-                  
-                  metrics = config.get('metrics_test', {})
-                  if metrics:
-                      print("   delta_high  R²:", f"{metrics.get('delta_high', {}).get('R2', 0):.4f}")
-                      print("   delta_low   R²:", f"{metrics.get('delta_low', {}).get('R2', 0):.4f}")
-                      print("   delta_close R²:", f"{metrics.get('delta_close', {}).get('R2', 0):.4f}")
-              except:
-                  pass
-              PYEOF
-                          fi
-                        else
-                          echo "  ℹ️ ENTRENAMIENTO NO NECESARIO"
-                        fi
-                        echo "══════════════════════════════════════════════════════════════════════"
+import json
+try:
+    with open('ADAUSD_MODELS/config_hybrid.json', 'r') as f:
+        config = json.load(f)
+    
+    metrics = config.get('metrics_test', {})
+    if metrics:
+        print("   delta_high  R²:", f"{metrics.get('delta_high', {}).get('R2', 0):.4f}")
+        print("   delta_low   R²:", f"{metrics.get('delta_low', {}).get('R2', 0):.4f}")
+        print("   delta_close R²:", f"{metrics.get('delta_close', {}).get('R2', 0):.4f}")
+        
+        avg_r2 = sum(m.get('R2', 0) for m in metrics.values()) / len(metrics)
+        print(f"\n   📈 R² promedio: {avg_r2:.4f}")
+        
+        if 'training_time_minutes' in config:
+            print(f"   ⏱️  Tiempo: {config['training_time_minutes']:.1f} min")
+        
+        if 'total_epochs' in config:
+            print(f"   🔄 Épocas: {config['total_epochs']}")
+except:
+    pass
+PYEOF
+            fi
+          else
+            echo "  ℹ️ ENTRENAMIENTO NO NECESARIO"
+          fi
+          echo "╚═══════════════════════════════════════════════════════════════════╝"
