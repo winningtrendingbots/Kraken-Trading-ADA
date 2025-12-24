@@ -385,12 +385,38 @@ def execute_trading_strategy():
     
     side = signal['signal'].lower()
     
+    # 🔥 NUEVO: TP DINÁMICO basado en predicciones del modelo
     if side == 'buy':
-        stop_loss = current_price * 0.98
-        take_profit = signal.get('pred_close', current_price * 1.03)
-    else:
-        stop_loss = current_price * 1.02
-        take_profit = signal.get('pred_close', current_price * 0.97)
+        stop_loss = current_price * 0.98  # SL fijo al -2%
+        
+        # Usar pred_high del modelo
+        pred_high = signal.get('pred_high', current_price * 1.03)
+        distance_to_high = pred_high - current_price
+        
+        # TP al 70% de la distancia predicha (conservador)
+        take_profit = current_price + (distance_to_high * 0.70)
+        
+        print(f"\n📊 Análisis BUY:")
+        print(f"   Precio actual: ${current_price:.4f}")
+        print(f"   Pred High: ${pred_high:.4f} (+{((pred_high - current_price) / current_price * 100):.2f}%)")
+        print(f"   Distancia a High: ${distance_to_high:.4f}")
+        print(f"   TP (70% dist): ${take_profit:.4f} (+{((take_profit - current_price) / current_price * 100):.2f}%)")
+        
+    else:  # SELL
+        stop_loss = current_price * 1.02  # SL fijo al +2%
+        
+        # Usar pred_low del modelo
+        pred_low = signal.get('pred_low', current_price * 0.97)
+        distance_to_low = current_price - pred_low
+        
+        # TP al 70% de la distancia predicha
+        take_profit = current_price - (distance_to_low * 0.70)
+        
+        print(f"\n📊 Análisis SELL:")
+        print(f"   Precio actual: ${current_price:.4f}")
+        print(f"   Pred Low: ${pred_low:.4f} ({((pred_low - current_price) / current_price * 100):.2f}%)")
+        print(f"   Distancia a Low: ${distance_to_low:.4f}")
+        print(f"   TP (70% dist): ${take_profit:.4f} ({((take_profit - current_price) / current_price * 100):.2f}%)")
     
     print(f"\n📊 Setup del Trade:")
     print(f"   Entry: ${current_price:.4f}")
@@ -449,6 +475,17 @@ def execute_trading_strategy():
     save_order_to_tracking(order_result, signal, position)
     rm.reserve_margin(position['margin_required'])
     
+    # 🔥 MENSAJE MEJORADO con predicciones del modelo
+    pred_info = ""
+    if side == 'buy':
+        pred_high = signal.get('pred_high', 0)
+        if pred_high > 0:
+            pred_info = f"\n📈 *Predicción Modelo:*\n   High: ${pred_high:.4f} (+{((pred_high - current_price) / current_price * 100):.2f}%)"
+    else:
+        pred_low = signal.get('pred_low', 0)
+        if pred_low > 0:
+            pred_info = f"\n📉 *Predicción Modelo:*\n   Low: ${pred_low:.4f} ({((pred_low - current_price) / current_price * 100):.2f}%)"
+    
     msg = f"""
 🚀 *ORDEN EJECUTADA*
 
@@ -456,6 +493,7 @@ def execute_trading_strategy():
    • Señal: {signal['signal']}
    • Confianza: {signal['confidence']:.1f}%
    • Precio: ${current_price:.4f}
+{pred_info}
 
 💼 *Posición:*
    • Volumen: {position['volume']} ADA
@@ -464,7 +502,7 @@ def execute_trading_strategy():
    • Margen: ${position['margin_required']:.2f}
 
 🎯 *Objetivos:*
-   • TP: ${take_profit:.4f} (monitoreo manual)
+   • TP: ${take_profit:.4f} (70% de pred - monitoreo manual)
    • SL: ${stop_loss:.4f} 🛡️ *AUTOMÁTICO*
    • R/R: {trade_validation['rr_ratio']:.2f}
    • Liquidación: ${position['liquidation_price']:.4f}
