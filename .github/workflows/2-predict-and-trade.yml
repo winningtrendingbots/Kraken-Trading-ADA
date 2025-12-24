@@ -2,7 +2,7 @@ name: Predict & Trade (Mejorado)
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Cada 5 minutos y si n va bien cada 15
+    - cron: '*/15 * * * *'  # Cada 5 minutos y si n va bien cada 15
   workflow_dispatch:
 
 permissions:
