@@ -1,9 +1,10 @@
 """
-KRAKEN TRADER - VERSIÓN HÍBRIDA
+KRAKEN TRADER - VERSIÓN HÍBRIDA CON SINCRONIZACIÓN
 
 ✅ Ordenes con STOP-LOSS automático
 ✅ Monitoreo manual para TAKE-PROFIT
 ✅ Protección total: si el bot falla, el SL te salva
+🆕 Sincronización con estado real de Kraken
 """
 
 import pandas as pd
@@ -149,7 +150,7 @@ def get_current_price():
 
 def load_last_signal():
     """Carga la última señal generada"""
-    print(f"\n🔍 Buscando señales en {SIGNALS_FILE}...")
+    print(f"\n🔎 Buscando señales en {SIGNALS_FILE}...")
     
     if not os.path.exists(SIGNALS_FILE):
         print(f"⚠️ No existe {SIGNALS_FILE}")
@@ -185,18 +186,73 @@ def load_last_signal():
         print(f"❌ Error leyendo señales: {e}")
         return None
 
+def sync_open_orders_with_kraken():
+    """
+    🆕 Sincroniza open_orders.json con el estado REAL de Kraken
+    Elimina órdenes que ya no existen en Kraken
+    """
+    print("\n🔄 Sincronizando con Kraken...")
+    
+    if not os.path.exists(OPEN_ORDERS_FILE):
+        print("✅ No hay órdenes locales")
+        return {}
+    
+    # Cargar órdenes locales
+    with open(OPEN_ORDERS_FILE, 'r') as f:
+        local_orders = json.load(f)
+    
+    if len(local_orders) == 0:
+        print("✅ No hay órdenes locales")
+        return {}
+    
+    # Consultar órdenes REALES en Kraken
+    print(f"📋 Verificando {len(local_orders)} orden(es) local(es)...")
+    
+    result = kraken_request('/0/private/OpenOrders', {})
+    
+    if not result:
+        print("⚠️ No se pudo consultar Kraken, manteniendo estado local")
+        return local_orders
+    
+    kraken_open_orders = result.get('open', {})
+    
+    # Filtrar órdenes que YA NO EXISTEN en Kraken
+    orders_to_remove = []
+    
+    for order_id in local_orders.keys():
+        if order_id not in kraken_open_orders:
+            print(f"🗑️ Orden {order_id} ya no existe en Kraken (cerrada manualmente)")
+            orders_to_remove.append(order_id)
+    
+    # Eliminar órdenes cerradas
+    for order_id in orders_to_remove:
+        del local_orders[order_id]
+    
+    # Guardar estado actualizado
+    with open(OPEN_ORDERS_FILE, 'w') as f:
+        json.dump(local_orders, f, indent=2)
+    
+    if len(orders_to_remove) > 0:
+        print(f"✅ {len(orders_to_remove)} orden(es) eliminada(s)")
+    
+    if len(local_orders) > 0:
+        print(f"📊 {len(local_orders)} orden(es) realmente abierta(s)")
+    else:
+        print("✅ No hay órdenes abiertas")
+    
+    return local_orders
+
 def check_existing_orders():
-    """Verifica si ya hay órdenes abiertas"""
-    if os.path.exists(OPEN_ORDERS_FILE):
-        try:
-            with open(OPEN_ORDERS_FILE, 'r') as f:
-                orders = json.load(f)
-            
-            if len(orders) > 0:
-                print(f"⚠️ Ya hay {len(orders)} orden(es) abierta(s)")
-                return True
-        except:
-            pass
+    """
+    Verifica si ya hay órdenes abiertas
+    🔥 AHORA sincroniza con Kraken primero
+    """
+    # 🆕 Sincronizar con Kraken
+    orders = sync_open_orders_with_kraken()
+    
+    if len(orders) > 0:
+        print(f"⚠️ Ya hay {len(orders)} orden(es) abierta(s)")
+        return True
     
     return False
 
@@ -226,14 +282,13 @@ def place_margin_order_with_sl(side, volume, leverage, entry_price, stop_loss):
     else:
         sl_limit_price = stop_loss * 1.005
     
-   # Orden principal
+    # Orden principal
     order_data = {
         'pair': PAIR,
         'type': side,
         'ordertype': 'market',
         'volume': str(volume),
         'leverage': str(leverage),
-        #'oflags': 'post',  # ❌ ESTA LÍNEA CAUSA EL ERROR
         'close': json.dumps({
             'ordertype': 'stop-loss-limit',
             'price': str(stop_loss),
@@ -525,18 +580,15 @@ def monitor_orders():
     """
     Monitorea órdenes abiertas - Solo revisa TAKE PROFIT
     (El stop-loss es automático en Kraken)
+    🔥 AHORA sincroniza con Kraken al inicio
     """
     print("\n🔍 Monitoreando órdenes abiertas (solo TP)...")
     
-    if not os.path.exists(OPEN_ORDERS_FILE):
-        print("ℹ️ No hay órdenes que monitorear")
-        return
-    
-    with open(OPEN_ORDERS_FILE, 'r') as f:
-        orders = json.load(f)
+    # 🆕 Sincronizar con Kraken PRIMERO
+    orders = sync_open_orders_with_kraken()
     
     if len(orders) == 0:
-        print("ℹ️ No hay órdenes abiertas")
+        print("ℹ️ No hay órdenes que monitorear")
         return
     
     print(f"📋 Monitoreando {len(orders)} orden(es)...")
@@ -595,7 +647,7 @@ def monitor_orders():
                 # Remover de open_orders
                 del orders[order_id]
                 
-                msg = f"🔔 *Posición Cerrada*\n\n"
+                msg = f"🔒 *Posición Cerrada*\n\n"
                 msg += f"Razón: {close_reason}\n"
                 msg += f"P&L: {pnl_pct:+.2f}%\n"
                 msg += f"Tiempo abierto: {time_open}"
