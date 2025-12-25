@@ -153,30 +153,34 @@ def calculate_enhanced_indicators(df):
     return df
 
 # ================================
-# 🧠 BAHDANAU ATTENTION
+# 🧠 BAHDANAU ATTENTION (HÍBRIDO)
 # ================================
 class BahdanauAttention(nn.Module):
-    def __init__(self, hidden_size):
+    def __init__(self, encoder_hidden_size, decoder_hidden_size):
         super().__init__()
-        self.W1 = nn.Linear(hidden_size, hidden_size)
-        self.W2 = nn.Linear(hidden_size, hidden_size)
-        self.V = nn.Linear(hidden_size, 1)
+        # Proyectar encoder y decoder a un espacio común
+        self.attention_size = decoder_hidden_size
+        self.W1 = nn.Linear(encoder_hidden_size, self.attention_size)
+        self.W2 = nn.Linear(decoder_hidden_size, self.attention_size)
+        self.V = nn.Linear(self.attention_size, 1)
     
     def forward(self, decoder_hidden, encoder_outputs):
-        # decoder_hidden: (batch, hidden)
-        # encoder_outputs: (batch, seq_len, hidden)
+        # decoder_hidden: (batch, decoder_hidden_size)
+        # encoder_outputs: (batch, seq_len, encoder_hidden_size)
         
-        decoder_hidden = decoder_hidden.unsqueeze(1)  # (batch, 1, hidden)
+        decoder_hidden = decoder_hidden.unsqueeze(1)  # (batch, 1, decoder_hidden_size)
+        
+        # Proyectar ambos al mismo espacio
+        encoder_proj = self.W1(encoder_outputs)  # (batch, seq_len, attention_size)
+        decoder_proj = self.W2(decoder_hidden)    # (batch, 1, attention_size)
         
         # Calcular scores de atención
-        score = self.V(torch.tanh(
-            self.W1(encoder_outputs) + self.W2(decoder_hidden)
-        ))  # (batch, seq_len, 1)
+        score = self.V(torch.tanh(encoder_proj + decoder_proj))  # (batch, seq_len, 1)
         
         attention_weights = torch.softmax(score, dim=1)  # (batch, seq_len, 1)
         
-        # Context vector
-        context = torch.sum(attention_weights * encoder_outputs, dim=1)  # (batch, hidden)
+        # Context vector (mantiene dimensión del encoder)
+        context = torch.sum(attention_weights * encoder_outputs, dim=1)  # (batch, encoder_hidden_size)
         
         return context, attention_weights
 
@@ -230,52 +234,58 @@ class LSTMEncoder(nn.Module):
 # ================================
 class GRUDecoder(nn.Module):
     """Decoder GRU - Más eficiente que LSTM"""
-    def __init__(self, hidden_size=160, num_layers=2, dropout=0.25):
+    def __init__(self, encoder_hidden_size=128, decoder_hidden_size=160, 
+                 num_layers=2, dropout=0.25):
         super().__init__()
         
-        self.hidden_size = hidden_size
+        self.encoder_hidden_size = encoder_hidden_size
+        self.decoder_hidden_size = decoder_hidden_size
         self.num_layers = num_layers
         
-        # GRU (más rápido y menos propenso a overfitting que LSTM)
+        # GRU (input es context del encoder + predicción anterior)
         self.gru = nn.GRU(
-            input_size=hidden_size + 1,  # context + previous prediction
-            hidden_size=hidden_size,
+            input_size=encoder_hidden_size + 1,  # context (encoder) + previous prediction
+            hidden_size=decoder_hidden_size,
             num_layers=num_layers,
             batch_first=True,
             dropout=dropout if num_layers > 1 else 0
         )
         
-        # Attention
-        self.attention = BahdanauAttention(hidden_size)
+        # Attention (necesita saber las dimensiones de ambos)
+        self.attention = BahdanauAttention(encoder_hidden_size, decoder_hidden_size)
         
-        # Projection layer para alinear encoder hidden con decoder
-        self.hidden_projection = nn.Linear(128, hidden_size)  # encoder_hidden → decoder_hidden
+        # Projection layer para alinear encoder hidden con decoder hidden
+        self.hidden_projection = nn.Linear(encoder_hidden_size, decoder_hidden_size)
         
-        # Output layer
+        # Output layer (context es encoder_hidden_size + gru output es decoder_hidden_size)
         self.fc = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size),  # concat(context, hidden)
-            nn.LayerNorm(hidden_size),
+            nn.Linear(encoder_hidden_size + decoder_hidden_size, decoder_hidden_size),
+            nn.LayerNorm(decoder_hidden_size),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_size, 1)
+            nn.Linear(decoder_hidden_size, 1)
         )
     
     def forward(self, prev_output, hidden, encoder_outputs):
         # prev_output: (batch, 1) - predicción anterior
-        # hidden: (num_layers, batch, hidden)
-        # encoder_outputs: (batch, seq_len, hidden)
+        # hidden: (num_layers, batch, decoder_hidden_size)
+        # encoder_outputs: (batch, seq_len, encoder_hidden_size)
         
         # Obtener context via attention (usa el último hidden del decoder)
         context, attn_weights = self.attention(hidden[-1], encoder_outputs)
+        # context: (batch, encoder_hidden_size)
         
         # Concatenar previous output con context
-        gru_input = torch.cat([context, prev_output], dim=-1).unsqueeze(1)  # (batch, 1, hidden+1)
+        gru_input = torch.cat([context, prev_output], dim=-1).unsqueeze(1)
+        # gru_input: (batch, 1, encoder_hidden_size + 1)
         
-        # GRU step (solo retorna hidden, no cell como LSTM)
+        # GRU step
         gru_out, new_hidden = self.gru(gru_input, hidden)
+        # gru_out: (batch, 1, decoder_hidden_size)
         
-        # Generar predicción
-        combined = torch.cat([gru_out.squeeze(1), context], dim=-1)  # (batch, hidden*2)
+        # Generar predicción (concat context del encoder + output del decoder)
+        combined = torch.cat([gru_out.squeeze(1), context], dim=-1)
+        # combined: (batch, decoder_hidden_size + encoder_hidden_size)
         prediction = self.fc(combined)  # (batch, 1)
         
         return prediction, new_hidden, attn_weights
@@ -299,7 +309,8 @@ class HybridEncoderDecoder(nn.Module):
         )
         
         self.decoder = GRUDecoder(
-            hidden_size=decoder_hidden,
+            encoder_hidden_size=encoder_hidden,
+            decoder_hidden_size=decoder_hidden,
             num_layers=decoder_layers,
             dropout=dropout
         )
