@@ -1,67 +1,362 @@
-name: 🤖 Train Model
+name: 🚀 Train Enhanced OHLCV Model 🤖
 
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 2 * * *'  # Diario a las 2 AM UTC
   workflow_dispatch:
+    inputs:
+      force_train:
+        description: 'Forzar reentrenamiento'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
-  train:
+  train-enhanced-ohlcv:
     runs-on: ubuntu-latest
+    timeout-minutes: 50
+    
     steps:
-      - name: Checkout
+      - name: 📥 Checkout
         uses: actions/checkout@v4
+      
+      - name: 🔍 Check model age
+        id: check
+        run: |
+          echo "Verificando edad del modelo mejorado OHLCV..."
+          
+          if [ "${{ github.event.inputs.force_train }}" = "true" ]; then
+            echo "🔧 Entrenamiento forzado"
+            echo "should_train=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if [ -d "ADAUSD_MODELS" ] && [ -f "ADAUSD_MODELS/adausd_enhanced_lstm_ohlcv.pth" ]; then
+            last_train=$(stat -c %Y "ADAUSD_MODELS/adausd_enhanced_lstm_ohlcv.pth")
+            current_time=$(date +%s)
+            age=$((current_time - last_train))
+            days=$((age / 86400))
+            
+            echo "📊 Modelo tiene $days días"
+            
+            if [ $days -ge 7 ]; then
+              echo "🔄 Reentrenamiento necesario (≥7 días)"
+              echo "should_train=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ Modelo vigente ($days días)"
+              echo "should_train=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ No existe modelo mejorado"
+            echo "should_train=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 🐍 Setup Python
+        if: steps.check.outputs.should_train == 'true'
+        uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Install dependencies
-        run: pip install pandas numpy torch yfinance requests joblib
-
-      - name: Train
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 📦 Install dependencies
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          echo "📦 Instalando dependencias..."
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 🧠 Train Enhanced OHLCV Model
+        if: steps.check.outputs.should_train == 'true'
         env:
           TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python adausd_lstm_5min.py
+        run: |
+          echo ""
+          echo "🔥 ============================================"
+          echo "   LSTM MEJORADO - PREDICCIÓN OHLCV"
+          echo "============================================"
+          echo ""
+          
+          # Verificar archivos Python disponibles
+          echo "📂 Verificando script..."
+          SCRIPT_NAME=""
+          
+          if [ -f "adausd_lstm_enhanced_ohlcv.py" ]; then
+            SCRIPT_NAME="adausd_lstm_enhanced_ohlcv.py"
+          elif [ -f "adausd_lstm_ohlcv.py" ]; then
+            SCRIPT_NAME="adausd_lstm_ohlcv.py"
+            echo "⚠️ Usando versión anterior (no mejorada)"
+          else
+            echo "❌ Error: No se encontró script de entrenamiento"
+            ls -la *.py 2>/dev/null || echo "Sin archivos .py en raíz"
+            find . -name "*lstm*.py" -type f
+            exit 1
+          fi
+          
+          echo "✅ Script: $SCRIPT_NAME"
+          echo ""
+          echo "✨ MEJORAS IMPLEMENTADAS:"
+          echo "   🔹 Volumen con log-normalización"
+          echo "   🔹 Scalers separados para precio/volumen"
+          echo "   🔹 Arquitectura robusta (128 hidden, 3 layers)"
+          echo "   🔹 Cabezas separadas (precio + volumen)"
+          echo "   🔹 +20 indicadores técnicos avanzados"
+          echo "   🔹 Loss balanceado (precio 1.0, volumen 0.1)"
+          echo "   🔹 SEQ_LEN: 90 (más contexto)"
+          echo "   🔹 LR: 0.0001 (convergencia estable)"
+          echo "   🔹 Batch: 64 (mejor gradientes)"
+          echo ""
+          
+          python "$SCRIPT_NAME"
+          
+          echo ""
+          echo "✅ Entrenamiento completado"
+      
+      - name: 📊 Validate metrics
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          echo ""
+          echo "🔍 Validando métricas del modelo mejorado..."
+          
+          CONFIG_FILE=""
+          if [ -f "ADAUSD_MODELS/config_enhanced_ohlcv.json" ]; then
+            CONFIG_FILE="ADAUSD_MODELS/config_enhanced_ohlcv.json"
+          elif [ -f "ADAUSD_MODELS/config_hybrid_ohlcv.json" ]; then
+            CONFIG_FILE="ADAUSD_MODELS/config_hybrid_ohlcv.json"
+          fi
+          
+          if [ -z "$CONFIG_FILE" ]; then
+            echo "❌ No se encontró archivo de configuración"
+            exit 0
+          fi
+          
+          echo "✅ Config: $CONFIG_FILE"
+          echo ""
+          echo "📊 MÉTRICAS DEL MODELO:"
+          python3 <<PYEOF
+import json
+import sys
 
-      - name: Commit and Push (Anti-Conflict)
+try:
+    with open('$CONFIG_FILE', 'r') as f:
+        config = json.load(f)
+    
+    metrics = config.get('metrics_test', {})
+    
+    if not metrics:
+        print("   ⚠️ No hay métricas disponibles")
+        sys.exit(0)
+    
+    # Separar precio y volumen
+    price_targets = ['delta_open', 'delta_high', 'delta_low', 'delta_close']
+    volume_target = 'delta_volume'
+    
+    print("   🎯 PRECIO (OHLC):")
+    print("   Target          R²        MAE       Accuracy")
+    print("   -------------------------------------------------")
+    
+    price_r2_sum = 0
+    price_acc_sum = 0
+    price_count = 0
+    
+    for target in price_targets:
+        if target in metrics:
+            data = metrics[target]
+            r2 = data.get('R2', 0)
+            mae = data.get('MAE', 0)
+            acc = data.get('Direction_Accuracy', 0)
+            print(f"   {target:14} {r2:8.4f}   {mae:8.6f}   {acc:6.2f}%")
+            price_r2_sum += r2
+            price_acc_sum += acc
+            price_count += 1
+    
+    if price_count > 0:
+        avg_price_r2 = price_r2_sum / price_count
+        avg_price_acc = price_acc_sum / price_count
+        print(f"\n   📈 Precio - R² promedio: {avg_price_r2:.4f}")
+        print(f"   🎯 Precio - Accuracy promedio: {avg_price_acc:.2f}%")
+    
+    # Volumen
+    if volume_target in metrics:
+        print("\n   💧 VOLUMEN:")
+        vol_data = metrics[volume_target]
+        vol_r2 = vol_data.get('R2', 0)
+        vol_mae = vol_data.get('MAE', 0)
+        vol_acc = vol_data.get('Direction_Accuracy', 0)
+        print(f"   R²: {vol_r2:8.4f}")
+        print(f"   MAE: {vol_mae:8.6f}")
+        print(f"   Accuracy: {vol_acc:6.2f}%")
+    
+    # Evaluación general
+    print("\n   📊 EVALUACIÓN:")
+    if price_count > 0:
+        if avg_price_r2 < 0:
+            print("   ⚠️  R² negativo - modelo no converge bien")
+            print("   💡 Sugerencias:")
+            print("      - Aumentar épocas de entrenamiento")
+            print("      - Ajustar learning rate")
+            print("      - Revisar features engineering")
+        elif avg_price_r2 < 0.3:
+            print("   ⚠️  R² bajo - rendimiento limitado")
+        elif avg_price_r2 < 0.5:
+            print("   ✅ R² aceptable - modelo funcional")
+        elif avg_price_r2 < 0.7:
+            print("   ✅ R² bueno - buen rendimiento")
+        else:
+            print("   🎉 R² excelente - alto rendimiento")
+        
+        if avg_price_acc > 55:
+            print(f"   ✅ Accuracy direccional buena ({avg_price_acc:.1f}%)")
+        else:
+            print(f"   ⚠️  Accuracy direccional baja ({avg_price_acc:.1f}%)")
+    
+except FileNotFoundError:
+    print(f"   ❌ No se encontró: $CONFIG_FILE")
+except Exception as e:
+    print(f"   ❌ Error: {e}")
+    import traceback
+    traceback.print_exc()
+PYEOF
+      
+      - name: 💾 Commit trained model
+        if: steps.check.outputs.should_train == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Sincronizar antes de subir
-          git pull origin main --rebase
+          # Añadir archivos del modelo mejorado
+          git add ADAUSD_MODELS/adausd_enhanced_lstm_ohlcv.pth 2>/dev/null || true
+          git add ADAUSD_MODELS/config_enhanced_ohlcv.json 2>/dev/null || true
+          git add ADAUSD_MODELS/scaler_input_enhanced.pkl 2>/dev/null || true
+          git add ADAUSD_MODELS/scaler_output_price_enhanced.pkl 2>/dev/null || true
+          git add ADAUSD_MODELS/scaler_output_volume_enhanced.pkl 2>/dev/null || true
+          git add adausd_enhanced_ohlcv_results.png 2>/dev/null || true
           
-          git add ADAUSD_MODELS/ ADAUSD_1h_data.csv latest_pred.json 2>/dev/null || true
+          # También archivos anteriores por compatibilidad
+          git add ADAUSD_MODELS/adausd_hybrid_lstm_ohlcv.pth 2>/dev/null || true
+          git add ADAUSD_MODELS/config_hybrid_ohlcv.json 2>/dev/null || true
+          git add adausd_hybrid_ohlcv_results.png 2>/dev/null || true
           
           if git diff --staged --quiet; then
-            echo "Sin cambios"
+            echo "ℹ️ No hay cambios para commitear"
           else
-            git commit -m "Model updated $(date -u +%Y-%m-%d)"
-            git push origin main
+            echo "📋 Archivos a commitear:"
+            git diff --staged --name-only
+            
+            TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+            git commit -m "🚀 Enhanced OHLCV Model trained: $TIMESTAMP"
+            
+            # Push con retry
+            MAX_RETRIES=3
+            for i in $(seq 1 $MAX_RETRIES); do
+              if git push; then
+                echo ""
+                echo "✅ Modelo mejorado guardado en repositorio"
+                break
+              else
+                if [ $i -lt $MAX_RETRIES ]; then
+                  echo "⚠️ Reintentando push ($i/$MAX_RETRIES)..."
+                  sleep 2
+                  git pull --rebase
+                else
+                  echo "❌ Error al guardar modelo después de $MAX_RETRIES intentos"
+                  exit 1
+                fi
+              fi
+            done
           fi
-
-      - name: Commit model
-        if: success()
+      
+      - name: 📊 Training summary
+        if: always()
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Sincronización forzada antes de subir
-          git pull origin main --rebase
-          
-          git add ADAUSD_MODELS/ ADAUSD_1h_data.csv latest_pred.json 2>/dev/null || true
-          
-          if git diff --staged --quiet; then
-            echo "Sin cambios"
+          echo ""
+          echo "╔═══════════════════════════════════════════════════════════════════╗"
+          if [ "${{ steps.check.outputs.should_train }}" = "true" ]; then
+            echo "  ✅ MODELO MEJORADO OHLCV ENTRENADO"
+            echo ""
+            echo "📁 Archivos generados:"
+            
+            # Verificar modelo mejorado
+            if [ -f "ADAUSD_MODELS/adausd_enhanced_lstm_ohlcv.pth" ]; then
+              echo "   ✅ adausd_enhanced_lstm_ohlcv.pth (MEJORADO)"
+            elif [ -f "ADAUSD_MODELS/adausd_hybrid_lstm_ohlcv.pth" ]; then
+              echo "   ✅ adausd_hybrid_lstm_ohlcv.pth (versión anterior)"
+            else
+              echo "   ❌ Modelo no encontrado"
+            fi
+            
+            # Verificar config
+            if [ -f "ADAUSD_MODELS/config_enhanced_ohlcv.json" ]; then
+              echo "   ✅ config_enhanced_ohlcv.json"
+              CONFIG_FILE="ADAUSD_MODELS/config_enhanced_ohlcv.json"
+            elif [ -f "ADAUSD_MODELS/config_hybrid_ohlcv.json" ]; then
+              echo "   ✅ config_hybrid_ohlcv.json"
+              CONFIG_FILE="ADAUSD_MODELS/config_hybrid_ohlcv.json"
+            else
+              CONFIG_FILE=""
+            fi
+            
+            # Verificar gráficas
+            if [ -f "adausd_enhanced_ohlcv_results.png" ]; then
+              echo "   ✅ adausd_enhanced_ohlcv_results.png"
+            elif [ -f "adausd_hybrid_ohlcv_results.png" ]; then
+              echo "   ✅ adausd_hybrid_ohlcv_results.png"
+            fi
+            
+            # Mostrar resumen de métricas
+            if [ -n "$CONFIG_FILE" ]; then
+              echo ""
+              echo "📊 Resumen de métricas:"
+              python3 <<PYEOF
+import json
+try:
+    with open('$CONFIG_FILE', 'r') as f:
+        config = json.load(f)
+    
+    metrics = config.get('metrics_test', {})
+    if metrics:
+        # Precio
+        price_targets = ['delta_open', 'delta_high', 'delta_low', 'delta_close']
+        print("   🎯 PRECIO:")
+        for t in price_targets:
+            if t in metrics:
+                r2 = metrics[t].get('R2', 0)
+                acc = metrics[t].get('Direction_Accuracy', 0)
+                print(f"      {t:14} R²: {r2:6.4f}  Acc: {acc:5.2f}%")
+        
+        # Promedio precio
+        price_r2 = [metrics[t]['R2'] for t in price_targets if t in metrics]
+        if price_r2:
+            avg_r2 = sum(price_r2) / len(price_r2)
+            print(f"\n   📈 R² promedio precio: {avg_r2:.4f}")
+        
+        # Volumen
+        if 'delta_volume' in metrics:
+            vol_r2 = metrics['delta_volume'].get('R2', 0)
+            vol_acc = metrics['delta_volume'].get('Direction_Accuracy', 0)
+            print(f"\n   💧 VOLUMEN:")
+            print(f"      R²: {vol_r2:6.4f}  Acc: {vol_acc:5.2f}%")
+        
+        # Info adicional
+        if 'training_time_minutes' in config:
+            print(f"\n   ⏱️  Tiempo: {config['training_time_minutes']:.1f} min")
+        
+        if 'total_epochs' in config:
+            print(f"   🔄 Épocas: {config['total_epochs']}")
+except:
+    pass
+PYEOF
+            fi
           else
-            git commit -m "🧠 AI Model Updated: HLCV + Advanced Logic"
-            git push origin main
+            echo "  ℹ️ ENTRENAMIENTO NO NECESARIO"
+            if [ -f "ADAUSD_MODELS/adausd_enhanced_lstm_ohlcv.pth" ]; then
+              last_train=$(stat -c %Y "ADAUSD_MODELS/adausd_enhanced_lstm_ohlcv.pth")
+              current_time=$(date +%s)
+              age=$((current_time - last_train))
+              days=$((age / 86400))
+              echo "  Modelo actual tiene $days días"
+            fi
           fi
+          echo "╚═══════════════════════════════════════════════════════════════════╝"
