@@ -3,6 +3,10 @@ ENCODER LSTM + DECODER GRU - TODOS LOS ERRORES CORREGIDOS
 ✅ Fix: TypeError cannot pickle 'mappingproxy' object
 ✅ Fix: R² mejorado con mejor arquitectura
 ✅ Fix: Patience correctamente implementado
+
+IMPORTANTE: Este es el archivo CORRECTO.
+Si ves "patience=X/15" en los logs, estás usando el archivo VIEJO.
+Este archivo debe mostrar "patience=X/30" en los logs.
 """
 
 import pandas as pd
