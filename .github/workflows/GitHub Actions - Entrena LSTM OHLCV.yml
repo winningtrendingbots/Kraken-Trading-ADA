@@ -78,6 +78,30 @@ jobs:
           echo "   ENTRENANDO MODELO LSTM OHLCV COMPLETO"
           echo "============================================"
           echo ""
+          
+          # Verificar archivos Python disponibles
+          echo "📂 Archivos Python disponibles:"
+          ls -la *.py 2>/dev/null || echo "   No se encontraron archivos .py en raíz"
+          
+          # Buscar el archivo correcto
+          SCRIPT_NAME=""
+          if [ -f "adausd_lstm_ohlcv.py" ]; then
+            SCRIPT_NAME="adausd_lstm_ohlcv.py"
+          elif [ -f "adausd_lstm_5min_delta.py" ]; then
+            SCRIPT_NAME="adausd_lstm_5min_delta.py"
+            echo "⚠️ Usando script alternativo: $SCRIPT_NAME"
+          elif [ -f "LSTM/adausd_lstm_ohlcv.py" ]; then
+            SCRIPT_NAME="LSTM/adausd_lstm_ohlcv.py"
+          else
+            echo "❌ Error: No se encontró el script de entrenamiento"
+            echo "   Buscando en subdirectorios..."
+            find . -name "*lstm*.py" -type f
+            exit 1
+          fi
+          
+          echo ""
+          echo "✅ Script encontrado: $SCRIPT_NAME"
+          echo ""
           echo "✨ Características:"
           echo "   • Predice: Open, High, Low, Close, Volume"
           echo "   • SEQ_LEN: 60 (contexto amplio)"
@@ -88,7 +112,7 @@ jobs:
           echo "   • Restricciones OHLC incorporadas"
           echo ""
           
-          python LSTM Híbrido - Predicción OHLCV Completo.py
+          python "$SCRIPT_NAME"
           
           echo ""
           echo "✅ Entrenamiento completado"
@@ -105,44 +129,44 @@ jobs:
             echo ""
             echo "📊 MÉTRICAS DEL MODELO OHLCV:"
             python3 <<'PYEOF'
-          import json
-          try:
-              with open('ADAUSD_MODELS/config_hybrid_ohlcv.json', 'r') as f:
-                  config = json.load(f)
-              
-              metrics = config.get('metrics_test', {})
-              
-              if metrics:
-                  print("   Target          R²        MAE       Accuracy")
-                  print("   -------------------------------------------------")
-                  
-                  targets_order = ['delta_open', 'delta_high', 'delta_low', 'delta_close', 'delta_volume']
-                  
-                  for target in targets_order:
-                      if target in metrics:
-                          data = metrics[target]
-                          r2 = data.get('R2', 0)
-                          mae = data.get('MAE', 0)
-                          acc = data.get('Direction_Accuracy', 0)
-                          print(f"   {target:14} {r2:8.4f}   {mae:8.6f}   {acc:6.2f}%")
-                  
-                  avg_r2 = sum(m['R2'] for m in metrics.values()) / len(metrics)
-                  avg_acc = sum(m.get('Direction_Accuracy', 0) for m in metrics.values()) / len(metrics)
-                  
-                  print(f"\n   📈 R² promedio: {avg_r2:.4f}")
-                  print(f"   🎯 Accuracy promedio: {avg_acc:.2f}%")
-                  
-                  if avg_r2 < 0:
-                      print("   ⚠️  R² negativo - modelo no converge")
-                  elif avg_r2 < 0.3:
-                      print("   ⚠️  R² bajo - considerar ajustar hiperparámetros")
-                  elif avg_r2 < 0.5:
-                      print("   ✅ R² aceptable")
-                  else:
-                      print("   🎉 R² excelente")
-          except Exception as e:
-              print(f"   Error: {e}")
-          PYEOF
+import json
+try:
+    with open('ADAUSD_MODELS/config_hybrid_ohlcv.json', 'r') as f:
+        config = json.load(f)
+    
+    metrics = config.get('metrics_test', {})
+    
+    if metrics:
+        print("   Target          R²        MAE       Accuracy")
+        print("   -------------------------------------------------")
+        
+        targets_order = ['delta_open', 'delta_high', 'delta_low', 'delta_close', 'delta_volume']
+        
+        for target in targets_order:
+            if target in metrics:
+                data = metrics[target]
+                r2 = data.get('R2', 0)
+                mae = data.get('MAE', 0)
+                acc = data.get('Direction_Accuracy', 0)
+                print(f"   {target:14} {r2:8.4f}   {mae:8.6f}   {acc:6.2f}%")
+        
+        avg_r2 = sum(m['R2'] for m in metrics.values()) / len(metrics)
+        avg_acc = sum(m.get('Direction_Accuracy', 0) for m in metrics.values()) / len(metrics)
+        
+        print(f"\n   📈 R² promedio: {avg_r2:.4f}")
+        print(f"   🎯 Accuracy promedio: {avg_acc:.2f}%")
+        
+        if avg_r2 < 0:
+            print("   ⚠️  R² negativo - modelo no converge")
+        elif avg_r2 < 0.3:
+            print("   ⚠️  R² bajo - considerar ajustar hiperparámetros")
+        elif avg_r2 < 0.5:
+            print("   ✅ R² aceptable")
+        else:
+            print("   🎉 R² excelente")
+except Exception as e:
+    print(f"   Error: {e}")
+PYEOF
           else
             echo "❌ No se encontró config_hybrid_ohlcv.json"
           fi
@@ -207,34 +231,34 @@ jobs:
               echo ""
               echo "📊 Resumen de métricas:"
               python3 <<'PYEOF'
-          import json
-          try:
-              with open('ADAUSD_MODELS/config_hybrid_ohlcv.json', 'r') as f:
-                  config = json.load(f)
-              
-              metrics = config.get('metrics_test', {})
-              if metrics:
-                  targets = ['delta_open', 'delta_high', 'delta_low', 'delta_close', 'delta_volume']
-                  for t in targets:
-                      if t in metrics:
-                          r2 = metrics[t].get('R2', 0)
-                          acc = metrics[t].get('Direction_Accuracy', 0)
-                          print(f"   {t:14} R²: {r2:6.4f}  Acc: {acc:5.2f}%")
-                  
-                  avg_r2 = sum(m.get('R2', 0) for m in metrics.values()) / len(metrics)
-                  avg_acc = sum(m.get('Direction_Accuracy', 0) for m in metrics.values()) / len(metrics)
-                  
-                  print(f"\n   📈 R² promedio: {avg_r2:.4f}")
-                  print(f"   🎯 Accuracy promedio: {avg_acc:.2f}%")
-                  
-                  if 'training_time_minutes' in config:
-                      print(f"   ⏱️  Tiempo: {config['training_time_minutes']:.1f} min")
-                  
-                  if 'total_epochs' in config:
-                      print(f"   🔄 Épocas: {config['total_epochs']}")
-          except:
-              pass
-          PYEOF
+import json
+try:
+    with open('ADAUSD_MODELS/config_hybrid_ohlcv.json', 'r') as f:
+        config = json.load(f)
+    
+    metrics = config.get('metrics_test', {})
+    if metrics:
+        targets = ['delta_open', 'delta_high', 'delta_low', 'delta_close', 'delta_volume']
+        for t in targets:
+            if t in metrics:
+                r2 = metrics[t].get('R2', 0)
+                acc = metrics[t].get('Direction_Accuracy', 0)
+                print(f"   {t:14} R²: {r2:6.4f}  Acc: {acc:5.2f}%")
+        
+        avg_r2 = sum(m.get('R2', 0) for m in metrics.values()) / len(metrics)
+        avg_acc = sum(m.get('Direction_Accuracy', 0) for m in metrics.values()) / len(metrics)
+        
+        print(f"\n   📈 R² promedio: {avg_r2:.4f}")
+        print(f"   🎯 Accuracy promedio: {avg_acc:.2f}%")
+        
+        if 'training_time_minutes' in config:
+            print(f"   ⏱️  Tiempo: {config['training_time_minutes']:.1f} min")
+        
+        if 'total_epochs' in config:
+            print(f"   🔄 Épocas: {config['total_epochs']}")
+except:
+    pass
+PYEOF
             fi
           else
             echo "  ℹ️ ENTRENAMIENTO NO NECESARIO"
