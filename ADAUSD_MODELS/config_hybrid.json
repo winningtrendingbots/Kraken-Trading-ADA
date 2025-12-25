@@ -1,0 +1,69 @@
+{
+  "input_size": 33,
+  "hidden_size": 64,
+  "num_layers": 2,
+  "output_size": 3,
+  "seq_len": 60,
+  "bidirectional": true,
+  "feature_cols": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "volume_1st_deriv",
+    "volume_2nd_deriv",
+    "volume_1st_deriv_smooth",
+    "volume_2nd_deriv_smooth",
+    "obv",
+    "obv_norm",
+    "obv_roc",
+    "typical_price",
+    "vwap",
+    "vwap_deviation",
+    "pvt",
+    "pvt_ma",
+    "pvt_signal",
+    "volume_price_ratio",
+    "volume_volatility_ratio",
+    "price_slope_14",
+    "obv_slope_14",
+    "bullish_divergence",
+    "bearish_divergence",
+    "rsi",
+    "volume_rsi",
+    "volume_acceleration",
+    "price_1st_deriv",
+    "price_2nd_deriv",
+    "price_volume_correlation",
+    "returns",
+    "volatility",
+    "volume_adjusted_volatility"
+  ],
+  "target_cols": [
+    "delta_high",
+    "delta_low",
+    "delta_close"
+  ],
+  "metrics_test": {
+    "delta_high": {
+      "MAE": 0.0035464942920953035,
+      "RMSE": 0.0056518647248416844,
+      "R2": -0.03442025184631348,
+      "Direction_Accuracy": 86.74980514419329
+    },
+    "delta_low": {
+      "MAE": 0.003879030467942357,
+      "RMSE": 0.012363479152785897,
+      "R2": -0.017447471618652344,
+      "Direction_Accuracy": 88.6983632112237
+    },
+    "delta_close": {
+      "MAE": 0.005748124793171883,
+      "RMSE": 0.008846241834511192,
+      "R2": 0.0001716017723083496,
+      "Direction_Accuracy": 51.01325019485581
+    }
+  },
+  "timestamp": "2025-12-25T00:20:48.756663"
+}
