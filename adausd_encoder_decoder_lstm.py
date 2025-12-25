@@ -31,38 +31,38 @@ warnings.filterwarnings('ignore')
 # 🎛️ CONFIGURACIÓN CORREGIDA
 # ================================
 class Config:
-    # Arquitectura mejorada
+    # Arquitectura mejorada para mejor aprendizaje
     SEQ_LEN = 60
-    ENCODER_HIDDEN = 128  # ⬆️ Aumentado para mejor capacidad
-    DECODER_HIDDEN = 128  
-    ENCODER_LAYERS = 2  # ⬆️ 2 layers para mejor abstracción
-    DECODER_LAYERS = 1
-    DROPOUT = 0.3  # ⬆️ Aumentado para regularización
+    ENCODER_HIDDEN = 128
+    DECODER_HIDDEN = 128
+    ENCODER_LAYERS = 2
+    DECODER_LAYERS = 2  # ⬆️ Aumentado a 2 para mejor capacidad
+    DROPOUT = 0.2  # ⬇️ Reducido - demasiado dropout causa underfitting
     BIDIRECTIONAL_ENCODER = True
     USE_ATTENTION = True
     
-    # Entrenamiento corregido
-    BATCH_SIZE = 64  # ⬇️ Reducido para mejor gradiente
+    # Entrenamiento ajustado
+    BATCH_SIZE = 64
     EPOCHS = 150
-    LEARNING_RATE = 0.0001  # ⬇️ Reducido para convergencia estable
-    WEIGHT_DECAY = 1e-4  # ⬆️ Aumentado para regularización
-    PATIENCE = 20
-    MIN_DELTA = 1e-5
+    LEARNING_RATE = 0.0005  # ⬆️ Aumentado - LR muy bajo causa convergencia lenta
+    WEIGHT_DECAY = 5e-5  # ⬇️ Reducido - demasiada regularización
+    PATIENCE = 25  # ⬆️ Aumentado para dar más tiempo
+    MIN_DELTA = 1e-6
     GRAD_CLIP = 1.0
-    TEACHER_FORCING_RATIO = 0.5  # ⬆️ Aumentado para mejor aprendizaje inicial
-    TEACHER_FORCING_DECAY = 0.99  # Decay gradual
+    TEACHER_FORCING_RATIO = 0.7  # ⬆️ Más alto para mejor aprendizaje
+    TEACHER_FORCING_DECAY = 0.98
     
     # Checkpointing
     CHECKPOINT_EVERY = 10
     RESUME_TRAINING = True
     
-    # Loss weights CORREGIDOS
+    # Loss weights ajustados
     PRICE_WEIGHT = 1.0
-    VOLUME_WEIGHT = 0.5  # ⬆️ Aumentado para que el modelo aprenda volumen
-    CONSTRAINT_WEIGHT = 0.1  # ⬇️ Reducido para no dominar el loss
+    VOLUME_WEIGHT = 0.3  # ⬇️ Reducido para enfocarse en precio primero
+    CONSTRAINT_WEIGHT = 0.05  # ⬇️ Muy reducido
     
     # Warmup
-    WARMUP_EPOCHS = 10
+    WARMUP_EPOCHS = 5  # ⬇️ Reducido
     
     # Datos
     TRAIN_SIZE = 0.70
@@ -235,14 +235,15 @@ class GRUDecoder(nn.Module):
         self.hidden_projection = nn.Linear(encoder_hidden_size, decoder_hidden_size)
         
         self.fc = nn.Sequential(
-            nn.Linear(encoder_hidden_size + decoder_hidden_size, decoder_hidden_size),
+            nn.Linear(encoder_hidden_size + decoder_hidden_size, decoder_hidden_size * 2),
+            nn.LayerNorm(decoder_hidden_size * 2),
+            nn.GELU(),  # Mejor que ReLU
+            nn.Dropout(dropout),
+            nn.Linear(decoder_hidden_size * 2, decoder_hidden_size),
             nn.LayerNorm(decoder_hidden_size),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(decoder_hidden_size, decoder_hidden_size // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(decoder_hidden_size // 2, 1)
+            nn.GELU(),
+            nn.Dropout(dropout / 2),
+            nn.Linear(decoder_hidden_size, 1)
         )
     
     def forward(self, prev_output, hidden, encoder_outputs):
@@ -298,7 +299,7 @@ class HybridEncoderDecoder(nn.Module):
                 prev_output = pred.detach()
         
         outputs = torch.cat(outputs, dim=-1)
-        outputs = self.output_activation(outputs) * 0.1  # ⬆️ Aumentado de 0.05 a 0.1
+        outputs = self.output_activation(outputs) * 0.15  # ⬆️ Aumentado para permitir variaciones mayores
         return outputs
 
 # ================================
@@ -386,10 +387,10 @@ def prepare_dataset(df):
 # 🏋️ LOSS MEJORADO
 # ================================
 class ImprovedHybridLoss(nn.Module):
-    def __init__(self, price_weight=1.0, volume_weight=0.5, constraint_weight=0.1):
+    def __init__(self, price_weight=1.0, volume_weight=0.3, constraint_weight=0.05):
         super().__init__()
         self.mse = nn.MSELoss()
-        self.mae = nn.L1Loss()
+        self.huber = nn.HuberLoss(delta=1.0)  # Más robusto a outliers
         self.price_weight = price_weight
         self.volume_weight = volume_weight
         self.constraint_weight = constraint_weight
@@ -400,16 +401,11 @@ class ImprovedHybridLoss(nn.Module):
         target_price = targets[:, :4]
         target_volume = targets[:, 4:]
         
-        # Combinación MSE + MAE para mejor convergencia
-        mse_price = self.mse(pred_price, target_price)
-        mae_price = self.mae(pred_price, target_price)
-        price_loss = 0.7 * mse_price + 0.3 * mae_price
+        # Usar Huber loss que es más robusto
+        price_loss = self.huber(pred_price, target_price)
+        volume_loss = self.huber(pred_volume, target_volume)
         
-        mse_volume = self.mse(pred_volume, target_volume)
-        mae_volume = self.mae(pred_volume, target_volume)
-        volume_loss = 0.7 * mse_volume + 0.3 * mae_volume
-        
-        # Constraints suaves
+        # Constraints MUY suaves
         delta_high = predictions[:, 1]
         delta_low = predictions[:, 2]
         delta_close = predictions[:, 3]
@@ -608,6 +604,13 @@ def train_model(model, train_loader, val_loader, device):
             'time': f'{epoch_time:.1f}s'
         })
         
+        # Logging detallado cada 20 épocas
+        if (epoch + 1) % 20 == 0:
+            print(f"\n📊 Epoch {epoch+1}:")
+            print(f"   Train: {train_loss:.4f} | Val: {val_loss:.4f} | Best: {best_val_loss:.4f}")
+            print(f"   Components - Price: {train_components['price']:.4f}, Vol: {train_components['volume']:.4f}, Constr: {train_components['constraint']:.4f}")
+            print(f"   LR: {current_lr:.6f} | TF: {teacher_forcing_ratio:.3f}")
+        
         if patience_counter >= Config.PATIENCE:
             print(f"\n⏹️ Early stopping at epoch {epoch+1}")
             break
@@ -714,14 +717,18 @@ def main():
         print("\n" + "="*70)
         print("  🚀 LSTM-GRU CORREGIDO Y OPTIMIZADO")
         print("="*70)
-        print("\n🔧 CORRECCIONES:")
-        print("   • Fix: Error de pickle resuelto")
-        print("   • Fix: Loss balanceado (volume_weight=0.5)")
-        print("   • Fix: Learning rate reducido (0.0001)")
-        print("   • Fix: Decoder más profundo")
-        print("   • Fix: Output activation scale 0.1")
-        print("   • Fix: Warmup scheduler")
-        print("   • Fix: Teacher forcing decay")
+        print("\n🔧 CORRECCIONES V2:")
+        print("   ✅ Fix: Error de pickle resuelto 100%")
+        print("   ✅ Fix: Metadata en JSON separado")
+        print("   ✅ Fix: Learning rate aumentado (0.0001→0.0005)")
+        print("   ✅ Fix: Dropout reducido (0.3→0.2) para evitar underfitting")
+        print("   ✅ Fix: Decoder 2 layers para mejor capacidad")
+        print("   ✅ Fix: Huber loss (más robusto que MSE+MAE)")
+        print("   ✅ Fix: Output scale 0.15 para variaciones mayores")
+        print("   ✅ Fix: Teacher forcing 0.7 para mejor aprendizaje")
+        print("   ✅ Fix: Weight decay reducido (1e-4→5e-5)")
+        print("   ✅ Fix: Decoder con GELU y más capas")
+        print("   🔍 Logging detallado cada 20 épocas")
         
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"\n🖥️ Device: {device}")
@@ -812,33 +819,54 @@ def main():
         model_dir = 'CORRECTED_MODELS'
         os.makedirs(model_dir, exist_ok=True)
         
-        # FIX: Guardar solo el state_dict y config manualmente
+        # FIX: Convertir TODOS los valores a tipos nativos Python
         config_dict = {
-            'seq_len': Config.SEQ_LEN,
-            'encoder_hidden': Config.ENCODER_HIDDEN,
-            'decoder_hidden': Config.DECODER_HIDDEN,
-            'encoder_layers': Config.ENCODER_LAYERS,
-            'decoder_layers': Config.DECODER_LAYERS,
-            'dropout': Config.DROPOUT,
-            'batch_size': Config.BATCH_SIZE,
-            'learning_rate': Config.LEARNING_RATE
+            'seq_len': int(Config.SEQ_LEN),
+            'encoder_hidden': int(Config.ENCODER_HIDDEN),
+            'decoder_hidden': int(Config.DECODER_HIDDEN),
+            'encoder_layers': int(Config.ENCODER_LAYERS),
+            'decoder_layers': int(Config.DECODER_LAYERS),
+            'dropout': float(Config.DROPOUT),
+            'batch_size': int(Config.BATCH_SIZE),
+            'learning_rate': float(Config.LEARNING_RATE)
         }
         
+        # Convertir metrics a tipos nativos
+        metrics_clean = {}
+        for key, val in metrics.items():
+            metrics_clean[key] = {
+                k: float(v) if isinstance(v, (np.floating, np.integer)) else v 
+                for k, v in val.items()
+            }
+        
+        # Guardar modelo
         torch.save({
             'model_state_dict': model.state_dict(),
             'config': config_dict,
-            'input_size': input_size,
-            'feature_cols': feature_cols,
-            'target_cols': target_cols,
-            'metrics': metrics,
+            'input_size': int(input_size),
             'timestamp': datetime.now().isoformat()
         }, f'{model_dir}/lstm_gru_corrected.pth')
+        
+        # Guardar metadata en JSON separado
+        with open(f'{model_dir}/model_metadata.json', 'w') as f:
+            json.dump({
+                'feature_cols': feature_cols,
+                'target_cols': target_cols,
+                'metrics': metrics_clean,
+                'config': config_dict,
+                'training_time_minutes': float(training_time / 60),
+                'timestamp': datetime.now().isoformat()
+            }, f, indent=2)
         
         joblib.dump(scalers['input'], f'{model_dir}/scaler_input.pkl')
         joblib.dump(scalers['output_price'], f'{model_dir}/scaler_output_price.pkl')
         joblib.dump(scalers['output_volume'], f'{model_dir}/scaler_output_volume.pkl')
         
-        print(f"\n💾 Model saved in '{model_dir}/'")
+        print(f"\n💾 Archivos guardados en '{model_dir}/':")
+        print(f"   ✅ lstm_gru_corrected.pth (modelo PyTorch)")
+        print(f"   ✅ model_metadata.json (features, metrics, config)")
+        print(f"   ✅ scaler_*.pkl (3 scalers)")
+        print(f"   ✅ corrected_results.png (visualización)")
         print("\n" + "="*70)
         print("  ✅ PROCESS COMPLETE")
         print("="*70 + "\n")
