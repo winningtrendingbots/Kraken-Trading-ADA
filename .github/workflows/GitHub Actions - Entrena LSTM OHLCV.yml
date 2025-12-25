@@ -1,0 +1,242 @@
+name: 🤖 Train OHLCV Hybrid Model 🤖 
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Diario a las 2 AM UTC
+  workflow_dispatch:
+    inputs:
+      force_train:
+        description: 'Forzar reentrenamiento'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  train-hybrid-ohlcv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🔍 Check model age
+        id: check
+        run: |
+          echo "Verificando edad del modelo OHLCV..."
+          
+          if [ "${{ github.event.inputs.force_train }}" = "true" ]; then
+            echo "🔧 Entrenamiento forzado"
+            echo "should_train=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if [ -d "ADAUSD_MODELS" ] && [ -f "ADAUSD_MODELS/adausd_hybrid_lstm_ohlcv.pth" ]; then
+            last_train=$(stat -c %Y "ADAUSD_MODELS/adausd_hybrid_lstm_ohlcv.pth")
+            current_time=$(date +%s)
+            age=$((current_time - last_train))
+            days=$((age / 86400))
+            
+            echo "📊 Modelo tiene $days días"
+            
+            if [ $days -ge 7 ]; then
+              echo "🔄 Reentrenamiento necesario (≥7 días)"
+              echo "should_train=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ Modelo vigente ($days días)"
+              echo "should_train=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ No existe modelo OHLCV"
+            echo "should_train=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 🐍 Setup Python
+        if: steps.check.outputs.should_train == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 📦 Install dependencies
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          echo "📦 Instalando dependencias..."
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 🧠 Train OHLCV LSTM Model
+        if: steps.check.outputs.should_train == 'true'
+        env:
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          echo ""
+          echo "🔥 ============================================"
+          echo "   ENTRENANDO MODELO LSTM OHLCV COMPLETO"
+          echo "============================================"
+          echo ""
+          echo "✨ Características:"
+          echo "   • Predice: Open, High, Low, Close, Volume"
+          echo "   • SEQ_LEN: 60 (contexto amplio)"
+          echo "   • Hidden: 80 (capacidad para 5 outputs)"
+          echo "   • Dropout: 0.4 (regularización)"
+          echo "   • Batch: 128 (estabilidad)"
+          echo "   • LR: 0.0005 (convergencia suave)"
+          echo "   • Restricciones OHLC incorporadas"
+          echo ""
+          
+          python adausd_lstm_ohlcv.py
+          
+          echo ""
+          echo "✅ Entrenamiento completado"
+      
+      - name: 📊 Validate metrics
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          echo ""
+          echo "🔍 Validando métricas del modelo OHLCV..."
+          
+          if [ -f "ADAUSD_MODELS/config_hybrid_ohlcv.json" ]; then
+            echo "✅ Configuración encontrada"
+            
+            echo ""
+            echo "📊 MÉTRICAS DEL MODELO OHLCV:"
+            python3 <<'PYEOF'
+import json
+try:
+    with open('ADAUSD_MODELS/config_hybrid_ohlcv.json', 'r') as f:
+        config = json.load(f)
+    
+    metrics = config.get('metrics_test', {})
+    
+    if metrics:
+        print("   Target          R²        MAE       Accuracy")
+        print("   -------------------------------------------------")
+        
+        targets_order = ['delta_open', 'delta_high', 'delta_low', 'delta_close', 'delta_volume']
+        
+        for target in targets_order:
+            if target in metrics:
+                data = metrics[target]
+                r2 = data.get('R2', 0)
+                mae = data.get('MAE', 0)
+                acc = data.get('Direction_Accuracy', 0)
+                print(f"   {target:14} {r2:8.4f}   {mae:8.6f}   {acc:6.2f}%")
+        
+        avg_r2 = sum(m['R2'] for m in metrics.values()) / len(metrics)
+        avg_acc = sum(m.get('Direction_Accuracy', 0) for m in metrics.values()) / len(metrics)
+        
+        print(f"\n   📈 R² promedio: {avg_r2:.4f}")
+        print(f"   🎯 Accuracy promedio: {avg_acc:.2f}%")
+        
+        if avg_r2 < 0:
+            print("   ⚠️  R² negativo - modelo no converge")
+        elif avg_r2 < 0.3:
+            print("   ⚠️  R² bajo - considerar ajustar hiperparámetros")
+        elif avg_r2 < 0.5:
+            print("   ✅ R² aceptable")
+        else:
+            print("   🎉 R² excelente")
+except Exception as e:
+    print(f"   Error: {e}")
+PYEOF
+          else
+            echo "❌ No se encontró config_hybrid_ohlcv.json"
+          fi
+      
+      - name: 💾 Commit trained model
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Añadir archivos del modelo OHLCV
+          git add ADAUSD_MODELS/adausd_hybrid_lstm_ohlcv.pth 2>/dev/null || true
+          git add ADAUSD_MODELS/config_hybrid_ohlcv.json 2>/dev/null || true
+          git add ADAUSD_MODELS/scaler_input_hybrid_ohlcv.pkl 2>/dev/null || true
+          git add ADAUSD_MODELS/scaler_output_hybrid_ohlcv.pkl 2>/dev/null || true
+          git add adausd_hybrid_ohlcv_results.png 2>/dev/null || true
+          git add ADAUSD_1h_data.csv 2>/dev/null || true
+          
+          if git diff --staged --quiet; then
+            echo "ℹ️ No hay cambios para commitear"
+          else
+            echo "📋 Archivos a commitear:"
+            git diff --staged --name-only
+            
+            TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+            git commit -m "🤖 OHLCV Model trained: $TIMESTAMP"
+            
+            # Push con retry
+            MAX_RETRIES=3
+            for i in $(seq 1 $MAX_RETRIES); do
+              if git push; then
+                echo ""
+                echo "✅ Modelo OHLCV guardado en repositorio"
+                break
+              else
+                if [ $i -lt $MAX_RETRIES ]; then
+                  echo "⚠️ Reintentando push ($i/$MAX_RETRIES)..."
+                  sleep 2
+                  git pull --rebase
+                else
+                  echo "❌ Error al guardar modelo después de $MAX_RETRIES intentos"
+                  exit 1
+                fi
+              fi
+            done
+          fi
+      
+      - name: 📊 Training summary
+        if: always()
+        run: |
+          echo ""
+          echo "╔═══════════════════════════════════════════════════════════════════╗"
+          if [ "${{ steps.check.outputs.should_train }}" = "true" ]; then
+            echo "  ✅ MODELO OHLCV ENTRENADO"
+            echo ""
+            echo "📁 Archivos generados:"
+            [ -f "ADAUSD_MODELS/adausd_hybrid_lstm_ohlcv.pth" ] && echo "   ✅ adausd_hybrid_lstm_ohlcv.pth" || echo "   ❌ adausd_hybrid_lstm_ohlcv.pth"
+            [ -f "ADAUSD_MODELS/config_hybrid_ohlcv.json" ] && echo "   ✅ config_hybrid_ohlcv.json" || echo "   ❌ config_hybrid_ohlcv.json"
+            [ -f "adausd_hybrid_ohlcv_results.png" ] && echo "   ✅ adausd_hybrid_ohlcv_results.png" || echo "   ⚠️ adausd_hybrid_ohlcv_results.png"
+            
+            if [ -f "ADAUSD_MODELS/config_hybrid_ohlcv.json" ]; then
+              echo ""
+              echo "📊 Resumen de métricas:"
+              python3 <<'PYEOF'
+import json
+try:
+    with open('ADAUSD_MODELS/config_hybrid_ohlcv.json', 'r') as f:
+        config = json.load(f)
+    
+    metrics = config.get('metrics_test', {})
+    if metrics:
+        targets = ['delta_open', 'delta_high', 'delta_low', 'delta_close', 'delta_volume']
+        for t in targets:
+            if t in metrics:
+                r2 = metrics[t].get('R2', 0)
+                acc = metrics[t].get('Direction_Accuracy', 0)
+                print(f"   {t:14} R²: {r2:6.4f}  Acc: {acc:5.2f}%")
+        
+        avg_r2 = sum(m.get('R2', 0) for m in metrics.values()) / len(metrics)
+        avg_acc = sum(m.get('Direction_Accuracy', 0) for m in metrics.values()) / len(metrics)
+        
+        print(f"\n   📈 R² promedio: {avg_r2:.4f}")
+        print(f"   🎯 Accuracy promedio: {avg_acc:.2f}%")
+        
+        if 'training_time_minutes' in config:
+            print(f"   ⏱️  Tiempo: {config['training_time_minutes']:.1f} min")
+        
+        if 'total_epochs' in config:
+            print(f"   🔄 Épocas: {config['total_epochs']}")
+except:
+    pass
+PYEOF
+            fi
+          else
+            echo "  ℹ️ ENTRENAMIENTO NO NECESARIO"
+          fi
+          echo "╚═══════════════════════════════════════════════════════════════════╝"
