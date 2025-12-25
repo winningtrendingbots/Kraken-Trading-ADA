@@ -1,11 +1,14 @@
 """
-ENCODER LSTM + DECODER GRU HÍBRIDO CON ATTENTION
+ENCODER LSTM + DECODER GRU HÍBRIDO CON ATTENTION + ANÁLISIS AVANZADO
 ✅ Encoder: LSTM bidireccional (captura contexto completo)
 ✅ Decoder: GRU (más rápido, menos overfitting)
 ✅ Bahdanau Attention (enfoque dinámico en historia)
 ✅ Teacher forcing adaptativo
 ✅ Restricciones OHLC por diseño
 ✅ Log-normalización de volumen
+✅ Derivadas primeras y segundas de precio y volumen
+✅ Correlaciones precio-volumen
+✅ Exportación de métricas avanzadas a CSV
 """
 
 import pandas as pd
@@ -63,7 +66,179 @@ class Config:
     TEST_SIZE = 0.15
 
 # ================================
-# 📊 INDICADORES TÉCNICOS
+# 📊 ANÁLISIS AVANZADO DE DERIVADAS Y CORRELACIONES
+# ================================
+def calculate_advanced_derivatives(df):
+    """
+    Calcula derivadas primeras y segundas para precio y volumen,
+    así como correlaciones entre ambos
+    """
+    df = df.copy()
+    
+    # ========== DERIVADAS DE PRECIO ==========
+    # Primera derivada (velocidad de cambio del precio)
+    df['price_first_deriv'] = df['close'].diff()
+    df['price_velocity'] = df['close'].pct_change()
+    
+    # Segunda derivada (aceleración del precio)
+    df['price_second_deriv'] = df['price_first_deriv'].diff()
+    df['price_acceleration'] = df['price_velocity'].diff()
+    
+    # Derivadas suavizadas con media móvil
+    df['price_first_deriv_ma5'] = df['price_first_deriv'].rolling(5).mean()
+    df['price_second_deriv_ma5'] = df['price_second_deriv'].rolling(5).mean()
+    
+    # ========== DERIVADAS DE VOLUMEN ==========
+    # Primera derivada (velocidad de cambio del volumen)
+    df['volume_first_deriv'] = df['volume'].diff()
+    df['volume_velocity'] = df['volume'].pct_change()
+    
+    # Segunda derivada (aceleración del volumen)
+    df['volume_second_deriv'] = df['volume_first_deriv'].diff()
+    df['volume_acceleration'] = df['volume_velocity'].diff()
+    
+    # Derivadas suavizadas con media móvil
+    df['volume_first_deriv_ma5'] = df['volume_first_deriv'].rolling(5).mean()
+    df['volume_second_deriv_ma5'] = df['volume_second_deriv'].rolling(5).mean()
+    
+    # ========== CORRELACIONES PRECIO-VOLUMEN ==========
+    # Correlación rolling entre precio y volumen
+    df['price_volume_corr_10'] = df['close'].rolling(10).corr(df['volume'])
+    df['price_volume_corr_20'] = df['close'].rolling(20).corr(df['volume'])
+    df['price_volume_corr_50'] = df['close'].rolling(50).corr(df['volume'])
+    
+    # Correlación entre velocidades
+    df['velocity_corr_10'] = df['price_velocity'].rolling(10).corr(df['volume_velocity'])
+    df['velocity_corr_20'] = df['price_velocity'].rolling(20).corr(df['volume_velocity'])
+    
+    # Correlación entre aceleraciones
+    df['accel_corr_10'] = df['price_acceleration'].rolling(10).corr(df['volume_acceleration'])
+    df['accel_corr_20'] = df['price_acceleration'].rolling(20).corr(df['volume_acceleration'])
+    
+    # ========== MÉTRICAS ADICIONALES ==========
+    # Ratio de cambio precio/volumen
+    df['price_vol_ratio'] = df['price_velocity'] / (df['volume_velocity'].abs() + 1e-10)
+    
+    # Divergencia precio-volumen (cuando se mueven en direcciones opuestas)
+    df['price_vol_divergence'] = (np.sign(df['price_velocity']) != np.sign(df['volume_velocity'])).astype(int)
+    
+    # Momentum conjunto
+    df['joint_momentum'] = df['price_velocity'] * df['volume_velocity']
+    
+    # Limpieza de valores
+    df = df.replace([np.inf, -np.inf], np.nan)
+    df = df.fillna(method='ffill').fillna(method='bfill').fillna(0)
+    
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    for col in numeric_cols:
+        df[col] = np.clip(df[col], -1e6, 1e6)
+    
+    return df
+
+# ================================
+# 📊 EXPORTAR MÉTRICAS A CSV
+# ================================
+def export_derivatives_to_csv(df, filename='price_volume_derivatives.csv'):
+    """
+    Exporta las derivadas y correlaciones calculadas a un CSV
+    """
+    derivative_cols = [
+        'time', 'close', 'volume',
+        # Derivadas de precio
+        'price_first_deriv', 'price_velocity', 
+        'price_second_deriv', 'price_acceleration',
+        'price_first_deriv_ma5', 'price_second_deriv_ma5',
+        # Derivadas de volumen
+        'volume_first_deriv', 'volume_velocity',
+        'volume_second_deriv', 'volume_acceleration',
+        'volume_first_deriv_ma5', 'volume_second_deriv_ma5',
+        # Correlaciones
+        'price_volume_corr_10', 'price_volume_corr_20', 'price_volume_corr_50',
+        'velocity_corr_10', 'velocity_corr_20',
+        'accel_corr_10', 'accel_corr_20',
+        # Métricas adicionales
+        'price_vol_ratio', 'price_vol_divergence', 'joint_momentum'
+    ]
+    
+    # Filtrar solo las columnas que existen
+    export_cols = [col for col in derivative_cols if col in df.columns]
+    
+    df_export = df[export_cols].copy()
+    df_export.to_csv(filename, index=False)
+    print(f"\n✅ Derivadas y correlaciones exportadas a: {filename}")
+    
+    return filename
+
+# ================================
+# 📊 ESTADÍSTICAS DE DERIVADAS
+# ================================
+def analyze_derivatives_statistics(df):
+    """
+    Genera estadísticas descriptivas de las derivadas y correlaciones
+    """
+    print("\n" + "="*70)
+    print("  📊 ESTADÍSTICAS DE DERIVADAS Y CORRELACIONES")
+    print("="*70)
+    
+    stats_dict = {}
+    
+    # Grupos de análisis
+    price_derivs = ['price_first_deriv', 'price_second_deriv', 'price_velocity', 'price_acceleration']
+    volume_derivs = ['volume_first_deriv', 'volume_second_deriv', 'volume_velocity', 'volume_acceleration']
+    correlations = ['price_volume_corr_10', 'price_volume_corr_20', 'price_volume_corr_50',
+                   'velocity_corr_10', 'velocity_corr_20', 'accel_corr_10', 'accel_corr_20']
+    
+    # Analizar derivadas de precio
+    print("\n📈 DERIVADAS DE PRECIO:")
+    for col in price_derivs:
+        if col in df.columns:
+            data = df[col].dropna()
+            stats_dict[col] = {
+                'mean': float(data.mean()),
+                'std': float(data.std()),
+                'min': float(data.min()),
+                'max': float(data.max()),
+                'median': float(data.median())
+            }
+            print(f"  {col:25} | Mean: {data.mean():10.6f} | Std: {data.std():10.6f}")
+    
+    # Analizar derivadas de volumen
+    print("\n📊 DERIVADAS DE VOLUMEN:")
+    for col in volume_derivs:
+        if col in df.columns:
+            data = df[col].dropna()
+            stats_dict[col] = {
+                'mean': float(data.mean()),
+                'std': float(data.std()),
+                'min': float(data.min()),
+                'max': float(data.max()),
+                'median': float(data.median())
+            }
+            print(f"  {col:25} | Mean: {data.mean():10.6f} | Std: {data.std():10.6f}")
+    
+    # Analizar correlaciones
+    print("\n🔗 CORRELACIONES PRECIO-VOLUMEN:")
+    for col in correlations:
+        if col in df.columns:
+            data = df[col].dropna()
+            stats_dict[col] = {
+                'mean': float(data.mean()),
+                'std': float(data.std()),
+                'min': float(data.min()),
+                'max': float(data.max()),
+                'median': float(data.median())
+            }
+            print(f"  {col:25} | Mean: {data.mean():10.6f} | Std: {data.std():10.6f}")
+    
+    # Exportar estadísticas a JSON
+    with open('derivatives_statistics.json', 'w') as f:
+        json.dump(stats_dict, f, indent=2)
+    print(f"\n✅ Estadísticas exportadas a: derivatives_statistics.json")
+    
+    return stats_dict
+
+# ================================
+# 📊 INDICADORES TÉCNICOS (MANTENIDO DEL ORIGINAL)
 # ================================
 def calculate_enhanced_indicators(df):
     """Indicadores técnicos avanzados"""
@@ -158,30 +333,18 @@ def calculate_enhanced_indicators(df):
 class BahdanauAttention(nn.Module):
     def __init__(self, encoder_hidden_size, decoder_hidden_size):
         super().__init__()
-        # Proyectar encoder y decoder a un espacio común
         self.attention_size = decoder_hidden_size
         self.W1 = nn.Linear(encoder_hidden_size, self.attention_size)
         self.W2 = nn.Linear(decoder_hidden_size, self.attention_size)
         self.V = nn.Linear(self.attention_size, 1)
     
     def forward(self, decoder_hidden, encoder_outputs):
-        # decoder_hidden: (batch, decoder_hidden_size)
-        # encoder_outputs: (batch, seq_len, encoder_hidden_size)
-        
-        decoder_hidden = decoder_hidden.unsqueeze(1)  # (batch, 1, decoder_hidden_size)
-        
-        # Proyectar ambos al mismo espacio
-        encoder_proj = self.W1(encoder_outputs)  # (batch, seq_len, attention_size)
-        decoder_proj = self.W2(decoder_hidden)    # (batch, 1, attention_size)
-        
-        # Calcular scores de atención
-        score = self.V(torch.tanh(encoder_proj + decoder_proj))  # (batch, seq_len, 1)
-        
-        attention_weights = torch.softmax(score, dim=1)  # (batch, seq_len, 1)
-        
-        # Context vector (mantiene dimensión del encoder)
-        context = torch.sum(attention_weights * encoder_outputs, dim=1)  # (batch, encoder_hidden_size)
-        
+        decoder_hidden = decoder_hidden.unsqueeze(1)
+        encoder_proj = self.W1(encoder_outputs)
+        decoder_proj = self.W2(decoder_hidden)
+        score = self.V(torch.tanh(encoder_proj + decoder_proj))
+        attention_weights = torch.softmax(score, dim=1)
+        context = torch.sum(attention_weights * encoder_outputs, dim=1)
         return context, attention_weights
 
 # ================================
@@ -206,7 +369,6 @@ class LSTMEncoder(nn.Module):
             bidirectional=bidirectional
         )
         
-        # Si es bidireccional, proyectar a hidden_size simple
         if bidirectional:
             self.projection = nn.Linear(hidden_size * 2, hidden_size)
         else:
@@ -217,7 +379,6 @@ class LSTMEncoder(nn.Module):
         
         if self.projection:
             outputs = self.projection(outputs)
-            # Proyectar hidden y cell
             batch_size = x.size(0)
             hidden = hidden.view(self.num_layers, self.num_directions, batch_size, self.hidden_size)
             hidden = hidden.permute(0, 2, 1, 3).contiguous().view(self.num_layers, batch_size, -1)
@@ -233,7 +394,6 @@ class LSTMEncoder(nn.Module):
 # 🧠 DECODER (GRU) ✨
 # ================================
 class GRUDecoder(nn.Module):
-    """Decoder GRU - Más eficiente que LSTM"""
     def __init__(self, encoder_hidden_size=128, decoder_hidden_size=160, 
                  num_layers=2, dropout=0.25):
         super().__init__()
@@ -242,22 +402,17 @@ class GRUDecoder(nn.Module):
         self.decoder_hidden_size = decoder_hidden_size
         self.num_layers = num_layers
         
-        # GRU (input es context del encoder + predicción anterior)
         self.gru = nn.GRU(
-            input_size=encoder_hidden_size + 1,  # context (encoder) + previous prediction
+            input_size=encoder_hidden_size + 1,
             hidden_size=decoder_hidden_size,
             num_layers=num_layers,
             batch_first=True,
             dropout=dropout if num_layers > 1 else 0
         )
         
-        # Attention (necesita saber las dimensiones de ambos)
         self.attention = BahdanauAttention(encoder_hidden_size, decoder_hidden_size)
-        
-        # Projection layer para alinear encoder hidden con decoder hidden
         self.hidden_projection = nn.Linear(encoder_hidden_size, decoder_hidden_size)
         
-        # Output layer (context es encoder_hidden_size + gru output es decoder_hidden_size)
         self.fc = nn.Sequential(
             nn.Linear(encoder_hidden_size + decoder_hidden_size, decoder_hidden_size),
             nn.LayerNorm(decoder_hidden_size),
@@ -267,34 +422,17 @@ class GRUDecoder(nn.Module):
         )
     
     def forward(self, prev_output, hidden, encoder_outputs):
-        # prev_output: (batch, 1) - predicción anterior
-        # hidden: (num_layers, batch, decoder_hidden_size)
-        # encoder_outputs: (batch, seq_len, encoder_hidden_size)
-        
-        # Obtener context via attention (usa el último hidden del decoder)
         context, attn_weights = self.attention(hidden[-1], encoder_outputs)
-        # context: (batch, encoder_hidden_size)
-        
-        # Concatenar previous output con context
         gru_input = torch.cat([context, prev_output], dim=-1).unsqueeze(1)
-        # gru_input: (batch, 1, encoder_hidden_size + 1)
-        
-        # GRU step
         gru_out, new_hidden = self.gru(gru_input, hidden)
-        # gru_out: (batch, 1, decoder_hidden_size)
-        
-        # Generar predicción (concat context del encoder + output del decoder)
         combined = torch.cat([gru_out.squeeze(1), context], dim=-1)
-        # combined: (batch, decoder_hidden_size + encoder_hidden_size)
-        prediction = self.fc(combined)  # (batch, 1)
-        
+        prediction = self.fc(combined)
         return prediction, new_hidden, attn_weights
 
 # ================================
 # 🧠 ENCODER-DECODER HÍBRIDO
 # ================================
 class HybridEncoderDecoder(nn.Module):
-    """Encoder LSTM + Decoder GRU con Attention"""
     def __init__(self, input_size, encoder_hidden=128, decoder_hidden=160,
                  encoder_layers=2, decoder_layers=2, dropout=0.25, 
                  bidirectional_encoder=True):
@@ -318,56 +456,49 @@ class HybridEncoderDecoder(nn.Module):
         self.encoder_hidden = encoder_hidden
         self.decoder_hidden = decoder_hidden
         self.decoder_layers = decoder_layers
-        
-        # Activación de salida
         self.output_activation = nn.Tanh()
     
     def forward(self, x, target=None, teacher_forcing_ratio=0.4):
         batch_size = x.size(0)
-        
-        # ENCODE (LSTM)
         encoder_outputs, (encoder_hidden, encoder_cell) = self.encoder(x)
-        
-        # Proyectar encoder hidden a decoder hidden size
         decoder_hidden = self.decoder.hidden_projection(encoder_hidden[-self.decoder_layers:])
         
-        # Generar 5 outputs: ΔOpen, ΔHigh, ΔLow, ΔClose, ΔVolume
         outputs = []
         prev_output = torch.zeros(batch_size, 1).to(x.device)
         
         for t in range(5):
             use_teacher_forcing = target is not None and np.random.random() < teacher_forcing_ratio
-            
-            # DECODE (GRU)
-            pred, decoder_hidden, attn_weights = self.decoder(
-                prev_output, decoder_hidden, encoder_outputs
-            )
-            
+            pred, decoder_hidden, attn_weights = self.decoder(prev_output, decoder_hidden, encoder_outputs)
             outputs.append(pred)
             
-            # Siguiente input
             if use_teacher_forcing and t < 4:
                 prev_output = target[:, t:t+1]
             else:
                 prev_output = pred.detach()
         
-        # Concatenar outputs
-        outputs = torch.cat(outputs, dim=-1)  # (batch, 5)
-        
-        # Aplicar activación
+        outputs = torch.cat(outputs, dim=-1)
         outputs = self.output_activation(outputs) * 0.05
-        
         return outputs
 
 # ================================
-# 📦 PREPARACIÓN DE DATOS
+# 📦 PREPARACIÓN DE DATOS CON DERIVADAS
 # ================================
 def prepare_hybrid_dataset(df):
     print("\n" + "="*70)
-    print("  🔧 PREPARACIÓN PARA MODELO HÍBRIDO")
+    print("  🔧 PREPARACIÓN PARA MODELO HÍBRIDO + DERIVADAS")
     print("="*70)
     
+    # Calcular indicadores técnicos
     df = calculate_enhanced_indicators(df)
+    
+    # Calcular derivadas y correlaciones avanzadas
+    df = calculate_advanced_derivatives(df)
+    
+    # Exportar derivadas a CSV
+    export_derivatives_to_csv(df, 'ADAUSD_derivatives_correlations.csv')
+    
+    # Analizar estadísticas de derivadas
+    analyze_derivatives_statistics(df)
     
     # Targets
     df['delta_open'] = (df['open'].shift(-1) - df['close']) / (df['close'] + 1e-10)
@@ -384,7 +515,7 @@ def prepare_hybrid_dataset(df):
     feature_cols = [col for col in all_numeric_cols if col not in exclude_cols]
     target_cols = ['delta_open', 'delta_high', 'delta_low', 'delta_close', 'delta_volume']
     
-    print(f"🎯 {len(feature_cols)} features, {len(target_cols)} targets")
+    print(f"🎯 {len(feature_cols)} features (incluyendo derivadas), {len(target_cols)} targets")
     
     # Split
     train_end = int(len(df) * Config.TRAIN_SIZE)
@@ -460,7 +591,6 @@ class HybridLoss(nn.Module):
         mse_price = self.mse(pred_price, target_price).mean()
         mse_volume = self.mse(pred_volume, target_volume).mean()
         
-        # Restricciones OHLC
         delta_high = predictions[:, 1]
         delta_low = predictions[:, 2]
         delta_close = predictions[:, 3]
@@ -511,7 +641,7 @@ def train_hybrid_model(model, train_loader, val_loader, device):
     best_model_state = None
     patience_counter = 0
     
-    print(f"⚙️  Config: LR={Config.LEARNING_RATE}, Batch={Config.BATCH_SIZE}, TF={Config.TEACHER_FORCING_RATIO}")
+    print(f"⚙️ Config: LR={Config.LEARNING_RATE}, Batch={Config.BATCH_SIZE}, TF={Config.TEACHER_FORCING_RATIO}")
     
     epoch_bar = tqdm(range(Config.EPOCHS), desc="Training", unit="epoch")
     
@@ -579,7 +709,7 @@ def train_hybrid_model(model, train_loader, val_loader, device):
             print(f"\n📊 Epoch {epoch+1}: Train={train_loss:.4f}, Val={val_loss:.4f}, Best={best_val_loss:.4f}")
         
         if patience_counter >= Config.PATIENCE:
-            print(f"\n⏹️  Early stopping at epoch {epoch+1}")
+            print(f"\nℹ️ Early stopping at epoch {epoch+1}")
             break
     
     if best_model_state:
@@ -647,7 +777,8 @@ def evaluate_hybrid_model(model, test_loader, scalers, target_cols, device):
 def plot_hybrid_results(train_losses, val_losses, metrics, predictions, targets):
     fig = plt.figure(figsize=(20, 12))
     gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
-    fig.suptitle('Hybrid LSTM-GRU Encoder-Decoder - OHLCV Predictions', fontsize=16, fontweight='bold')
+    fig.suptitle('Hybrid LSTM-GRU Encoder-Decoder - OHLCV Predictions with Derivatives', 
+                 fontsize=16, fontweight='bold')
     
     # Loss
     ax1 = fig.add_subplot(gs[0, 0])
@@ -713,12 +844,84 @@ def plot_hybrid_results(train_losses, val_losses, metrics, predictions, targets)
     print("📈 Plots saved: hybrid_lstm_gru_results.png")
 
 # ================================
+# 📊 VISUALIZACIÓN DE DERIVADAS
+# ================================
+def plot_derivatives_analysis(df, save_path='derivatives_analysis.png'):
+    """
+    Crea visualizaciones de las derivadas y correlaciones
+    """
+    fig, axes = plt.subplots(3, 2, figsize=(16, 12))
+    fig.suptitle('Price-Volume Derivatives and Correlations Analysis', fontsize=16, fontweight='bold')
+    
+    sample = min(500, len(df))
+    df_plot = df.iloc[-sample:].copy()
+    
+    # 1. Derivadas de precio
+    ax1 = axes[0, 0]
+    ax1.plot(df_plot.index, df_plot['price_first_deriv'], label='1st Derivative', alpha=0.7)
+    ax1.plot(df_plot.index, df_plot['price_first_deriv_ma5'], label='1st Deriv (MA5)', linewidth=2)
+    ax1.set_title('Price First Derivative (Velocity)')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Aceleración de precio
+    ax2 = axes[0, 1]
+    ax2.plot(df_plot.index, df_plot['price_second_deriv'], label='2nd Derivative', alpha=0.7)
+    ax2.plot(df_plot.index, df_plot['price_second_deriv_ma5'], label='2nd Deriv (MA5)', linewidth=2)
+    ax2.set_title('Price Second Derivative (Acceleration)')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # 3. Derivadas de volumen
+    ax3 = axes[1, 0]
+    ax3.plot(df_plot.index, df_plot['volume_first_deriv'], label='1st Derivative', alpha=0.7)
+    ax3.plot(df_plot.index, df_plot['volume_first_deriv_ma5'], label='1st Deriv (MA5)', linewidth=2)
+    ax3.set_title('Volume First Derivative (Velocity)')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    # 4. Aceleración de volumen
+    ax4 = axes[1, 1]
+    ax4.plot(df_plot.index, df_plot['volume_second_deriv'], label='2nd Derivative', alpha=0.7)
+    ax4.plot(df_plot.index, df_plot['volume_second_deriv_ma5'], label='2nd Deriv (MA5)', linewidth=2)
+    ax4.set_title('Volume Second Derivative (Acceleration)')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    
+    # 5. Correlaciones precio-volumen
+    ax5 = axes[2, 0]
+    ax5.plot(df_plot.index, df_plot['price_volume_corr_10'], label='Corr 10', alpha=0.7)
+    ax5.plot(df_plot.index, df_plot['price_volume_corr_20'], label='Corr 20', linewidth=2)
+    ax5.plot(df_plot.index, df_plot['price_volume_corr_50'], label='Corr 50', linewidth=2)
+    ax5.axhline(y=0, color='r', linestyle='--', alpha=0.5)
+    ax5.set_title('Price-Volume Correlation (Rolling)')
+    ax5.legend()
+    ax5.grid(True, alpha=0.3)
+    
+    # 6. Momentum conjunto
+    ax6 = axes[2, 1]
+    ax6.plot(df_plot.index, df_plot['joint_momentum'], label='Joint Momentum', alpha=0.7)
+    ax6.axhline(y=0, color='r', linestyle='--', alpha=0.5)
+    ax6.fill_between(df_plot.index, 0, df_plot['joint_momentum'], 
+                      where=(df_plot['joint_momentum'] > 0), alpha=0.3, color='green', label='Positive')
+    ax6.fill_between(df_plot.index, 0, df_plot['joint_momentum'], 
+                      where=(df_plot['joint_momentum'] < 0), alpha=0.3, color='red', label='Negative')
+    ax6.set_title('Joint Price-Volume Momentum')
+    ax6.legend()
+    ax6.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"📈 Derivatives analysis plot saved: {save_path}")
+
+# ================================
 # 🚀 MAIN
 # ================================
 def main():
     try:
         print("\n" + "="*70)
-        print("  🚀 HYBRID LSTM ENCODER + GRU DECODER")
+        print("  🚀 HYBRID LSTM ENCODER + GRU DECODER + DERIVATIVES")
         print("="*70)
         
         print("\n✨ ARCHITECTURE:")
@@ -728,13 +931,15 @@ def main():
         print("   • Teacher forcing: 40% during training")
         print("   • Autoregressive generation")
         print("   • Structured output: ΔO→ΔH→ΔL→ΔC→ΔV")
-        print("\n💡 WHY HYBRID:")
-        print("   • LSTM encoder: Better long-term context capture")
-        print("   • GRU decoder: Faster, less overfitting")
-        print("   • Attention: Dynamic focus on history")
+        print("\n💡 ENHANCED FEATURES:")
+        print("   • Price 1st & 2nd derivatives (velocity & acceleration)")
+        print("   • Volume 1st & 2nd derivatives (velocity & acceleration)")
+        print("   • Rolling correlations (price-volume)")
+        print("   • Joint momentum analysis")
+        print("   • Export to CSV for external analysis")
         
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"\n🖥️  Device: {device}")
+        print(f"\n🖥️ Device: {device}")
         
         # Download data
         print("\n📥 Downloading ADA-USD data...")
@@ -758,9 +963,15 @@ def main():
         
         print(f"✅ Downloaded: {len(df):,} candles")
         
-        # Prepare data
+        # Prepare data (incluye cálculo y exportación de derivadas)
         (X_train, y_train), (X_val, y_val), (X_test, y_test), \
         scalers, feature_cols, target_cols = prepare_hybrid_dataset(df)
+        
+        # Crear visualización de derivadas
+        print("\n📊 Creating derivatives visualization...")
+        df_with_derivatives = calculate_enhanced_indicators(df)
+        df_with_derivatives = calculate_advanced_derivatives(df_with_derivatives)
+        plot_derivatives_analysis(df_with_derivatives, 'ADAUSD_derivatives_analysis.png')
         
         input_size = len(feature_cols)
         
@@ -804,7 +1015,7 @@ def main():
         train_losses, val_losses = train_hybrid_model(model, train_loader, val_loader, device)
         training_time = time.time() - start_time
         
-        print(f"\n⏱️  Training time: {training_time/60:.1f} min")
+        print(f"\n⏱️ Training time: {training_time/60:.1f} min")
         
         # Evaluate
         predictions, targets, metrics = evaluate_hybrid_model(
@@ -853,15 +1064,21 @@ def main():
             'timestamp': datetime.now().isoformat(),
             'training_time_minutes': training_time / 60,
             'total_epochs': len(train_losses),
-            'best_val_loss': min(val_losses)
+            'best_val_loss': min(val_losses),
+            'uses_derivatives': True,
+            'derivative_features': [
+                'price_first_deriv', 'price_second_deriv',
+                'volume_first_deriv', 'volume_second_deriv',
+                'price_volume_correlations', 'joint_momentum'
+            ]
         }
         
-        torch.save(model_config, f'{model_dir}/hybrid_lstm_gru.pth')
-        joblib.dump(scalers['input'], f'{model_dir}/scaler_input_hybrid.pkl')
-        joblib.dump(scalers['output_price'], f'{model_dir}/scaler_output_price_hybrid.pkl')
-        joblib.dump(scalers['output_volume'], f'{model_dir}/scaler_output_volume_hybrid.pkl')
+        torch.save(model_config, f'{model_dir}/hybrid_lstm_gru_with_derivatives.pth')
+        joblib.dump(scalers['input'], f'{model_dir}/scaler_input_hybrid_deriv.pkl')
+        joblib.dump(scalers['output_price'], f'{model_dir}/scaler_output_price_hybrid_deriv.pkl')
+        joblib.dump(scalers['output_volume'], f'{model_dir}/scaler_output_volume_hybrid_deriv.pkl')
         
-        with open(f'{model_dir}/config_hybrid_lstm_gru.json', 'w') as f:
+        with open(f'{model_dir}/config_hybrid_lstm_gru_derivatives.json', 'w') as f:
             json.dump({
                 'input_size': input_size,
                 'encoder_hidden': Config.ENCODER_HIDDEN,
@@ -869,13 +1086,17 @@ def main():
                 'feature_cols': feature_cols,
                 'target_cols': target_cols,
                 'metrics_test': metrics,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'uses_derivatives': True
             }, f, indent=2)
         
         print(f"\n💾 Model saved in '{model_dir}/'")
+        print(f"📄 Derivatives CSV: ADAUSD_derivatives_correlations.csv")
+        print(f"📄 Statistics JSON: derivatives_statistics.json")
+        print(f"📈 Derivatives plot: ADAUSD_derivatives_analysis.png")
         
         msg = f"""
-✅ *Hybrid LSTM-GRU*
+✅ *Hybrid LSTM-GRU + Derivatives*
 
 📊 *Price (OHLC):*
    • Avg R²: {avg_r2_price:.4f}
@@ -885,11 +1106,12 @@ def main():
    • R²: {vol_r2:.4f}
    • Accuracy: {vol_acc:.2f}%
 
-🏗️ *Architecture:*
+🗃️ *Architecture:*
    • Encoder: 2L Bi-LSTM (128h)
    • Decoder: 2L GRU (160h)
    • Bahdanau Attention
    • {total_params:,} parameters
+   • Enhanced with derivatives & correlations
 
 ⏱️ *Time:* {training_time/60:.1f} min
 """
