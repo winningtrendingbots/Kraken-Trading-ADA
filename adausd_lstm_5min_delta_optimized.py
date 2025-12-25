@@ -1,9 +1,8 @@
 """
-LSTM HÍBRIDO OPTIMIZADO CON SEGUIMIENTO DETALLADO
-✅ Configuración mejorada para mejores R²
+LSTM HÍBRIDO OPTIMIZADO - VERSION CORREGIDA
+✅ Sin parámetro 'verbose' que causa error
+✅ Configuración optimizada para mejores R²
 ✅ Monitoreo detallado del entrenamiento
-✅ Early stopping inteligente
-✅ Correcciones de bugs
 """
 
 import pandas as pd
@@ -12,7 +11,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from sklearn.preprocessing import StandardScaler, RobustScaler
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import matplotlib.pyplot as plt
 import os
@@ -22,7 +20,7 @@ import joblib
 import yfinance as yf
 from tqdm.auto import tqdm
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -31,43 +29,37 @@ warnings.filterwarnings('ignore')
 # 🎛️ CONFIGURACIÓN OPTIMIZADA
 # ================================
 class Config:
-    # Características híbridas
+    # Características
     USE_VOLUME = True
     USE_VOLUME_DERIVATIVES = True
     USE_VOLUME_INDICATORS = True
     USE_PRICE_DERIVATIVES = True
-    
-    # Targets
     PREDICT_DELTAS = True
-    
-    # Normalización
     SCALER_TYPE = 'robust'
     
-    # 🔧 ARQUITECTURA OPTIMIZADA (menos compleja)
-    SEQ_LEN = 60                   # ⬆️ Mayor contexto temporal
-    HIDDEN_SIZE = 64               # ⬇️ Reducido para evitar overfitting
-    NUM_LAYERS = 2                 # Mantener 2 capas
-    DROPOUT = 0.4                  # ⬆️ Mayor dropout para regularización
+    # Arquitectura optimizada
+    SEQ_LEN = 60
+    HIDDEN_SIZE = 64
+    NUM_LAYERS = 2
+    DROPOUT = 0.4
     BIDIRECTIONAL = True
     
-    # 🔧 ENTRENAMIENTO OPTIMIZADO
-    BATCH_SIZE = 128               # ⬆️ Batches más grandes = más estable
-    EPOCHS = 150                   # ⬆️ Más épocas con early stopping
-    LEARNING_RATE = 0.0005         # ⬇️ LR más bajo para convergencia estable
-    WEIGHT_DECAY = 1e-4            # ⬆️ Más regularización L2
-    PATIENCE = 20                  # ⬆️ Más paciencia para early stopping
-    MIN_DELTA = 1e-5               # Mejora mínima para considerar progreso
+    # Entrenamiento
+    BATCH_SIZE = 128
+    EPOCHS = 150
+    LEARNING_RATE = 0.0005
+    WEIGHT_DECAY = 1e-4
+    PATIENCE = 20
+    MIN_DELTA = 1e-5
+    GRAD_CLIP = 0.5
     
     # Datos
     TRAIN_SIZE = 0.70
     VAL_SIZE = 0.15
     TEST_SIZE = 0.15
-    
-    # Gradient clipping
-    GRAD_CLIP = 0.5                # ⬇️ Más agresivo para estabilidad
 
 # ================================
-# 📊 INDICADORES (igual que antes)
+# 📊 INDICADORES
 # ================================
 def calculate_hybrid_indicators(df):
     """Calcula indicadores híbridos"""
@@ -106,7 +98,7 @@ def calculate_hybrid_indicators(df):
     df['volume_price_ratio'] = df['volume'] / df['close'].rolling(window=20).mean()
     df['volume_volatility_ratio'] = df['volume'] / df['volume'].rolling(window=20).std()
     
-    # Pendientes y divergencias
+    # Pendientes
     def calculate_slope(series, window=14):
         slopes = []
         for i in range(len(series)):
@@ -141,9 +133,7 @@ def calculate_hybrid_indicators(df):
     df['volatility'] = df['returns'].rolling(window=20).std()
     df['volume_adjusted_volatility'] = df['volatility'] * (df['volume'] / df['volume'].rolling(window=20).mean())
     
-    # Limpiar
     df = clean_financial_data(df)
-    
     return df
 
 def calculate_rsi(series, period=14):
@@ -172,7 +162,7 @@ def clean_financial_data(df, max_abs_value=1e6, fill_method='ffill'):
     return df_clean
 
 # ================================
-# 🧠 MODELO OPTIMIZADO
+# 🧠 MODELO
 # ================================
 class HybridLSTM(nn.Module):
     def __init__(self, input_size, hidden_size=64, num_layers=2, 
@@ -182,7 +172,6 @@ class HybridLSTM(nn.Module):
         self.bidirectional = bidirectional
         self.num_directions = 2 if bidirectional else 1
         
-        # LSTM
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
@@ -192,14 +181,12 @@ class HybridLSTM(nn.Module):
             bidirectional=bidirectional
         )
         
-        # Atención simplificada
         self.attention = nn.Sequential(
             nn.Linear(hidden_size * self.num_directions, hidden_size),
             nn.Tanh(),
             nn.Linear(hidden_size, 1)
         )
         
-        # FC más simple para evitar overfitting
         fc_input = hidden_size * self.num_directions
         self.fc = nn.Sequential(
             nn.Linear(fc_input, fc_input // 2),
@@ -209,26 +196,18 @@ class HybridLSTM(nn.Module):
             nn.Linear(fc_input // 2, output_size)
         )
         
-        # Activación suave para deltas
         self.output_activation = nn.Tanh()
     
     def forward(self, x):
         lstm_out, _ = self.lstm(x)
-        
-        # Atención
         attn_weights = torch.softmax(self.attention(lstm_out), dim=1)
         context = torch.sum(attn_weights * lstm_out, dim=1)
-        
-        # FC
         output = self.fc(context)
-        
-        # Limitar deltas a ±5%
         output = self.output_activation(output) * 0.05
-        
         return output
 
 # ================================
-# 📦 PREPARACIÓN DE DATOS
+# 📦 PREPARACIÓN
 # ================================
 def prepare_hybrid_dataset(df):
     print("\n" + "="*70)
@@ -237,7 +216,6 @@ def prepare_hybrid_dataset(df):
     
     df = calculate_hybrid_indicators(df)
     
-    # Deltas
     df['delta_high'] = (df['high'].shift(-1) - df['close']) / df['close']
     df['delta_low'] = (df['low'].shift(-1) - df['close']) / df['close']
     df['delta_close'] = (df['close'].shift(-1) - df['close']) / df['close']
@@ -246,17 +224,14 @@ def prepare_hybrid_dataset(df):
     df = df.dropna()
     print(f"📊 Datos después de limpieza: {len(df):,} de {initial_len:,} velas")
     
-    # Features
     all_numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     exclude_cols = ['delta_high', 'delta_low', 'delta_close']
     feature_cols = [col for col in all_numeric_cols if col not in exclude_cols]
-    
     target_cols = ['delta_high', 'delta_low', 'delta_close']
     
     print(f"\n🎯 {len(feature_cols)} Características")
     print(f"🎯 {len(target_cols)} Targets")
     
-    # División temporal
     train_end = int(len(df) * Config.TRAIN_SIZE)
     val_end = int(len(df) * (Config.TRAIN_SIZE + Config.VAL_SIZE))
     
@@ -269,7 +244,6 @@ def prepare_hybrid_dataset(df):
     print(f"   Val:   {len(df_val):,} ({Config.VAL_SIZE*100:.0f}%)")
     print(f"   Test:  {len(df_test):,} ({Config.TEST_SIZE*100:.0f}%)")
     
-    # Normalización
     scaler_in = RobustScaler(quantile_range=(25, 75))
     scaler_out = RobustScaler(quantile_range=(25, 75))
     
@@ -281,7 +255,6 @@ def prepare_hybrid_dataset(df):
     y_val = scaler_out.transform(df_val[target_cols])
     y_test = scaler_out.transform(df_test[target_cols])
     
-    # Secuencias
     def create_sequences(X, y, seq_len):
         X_seq, y_seq = [], []
         for i in range(seq_len, len(X)):
@@ -302,10 +275,9 @@ def prepare_hybrid_dataset(df):
            scaler_in, scaler_out, feature_cols, target_cols
 
 # ================================
-# 🏋️ ENTRENAMIENTO CON SEGUIMIENTO DETALLADO
+# 🏋️ ENTRENAMIENTO
 # ================================
 class ImprovedLoss(nn.Module):
-    """Pérdida mejorada con pesos ajustados"""
     def __init__(self, mse_weight=1.0, constraint_weight=1.5, realism_weight=0.8):
         super().__init__()
         self.mse = nn.MSELoss()
@@ -320,17 +292,14 @@ class ImprovedLoss(nn.Module):
         delta_low = predictions[:, 1]
         delta_close = predictions[:, 2]
         
-        # Constraint 1: high >= low
         high_low_violation = torch.clamp(delta_low - delta_high, min=0)
         constraint_loss_1 = high_low_violation.mean()
         
-        # Constraint 2: close entre high y low
         close_below_low = torch.clamp(delta_low - delta_close, min=0)
         close_above_high = torch.clamp(delta_close - delta_high, min=0)
         constraint_loss_2 = (close_below_low + close_above_high).mean()
         
-        # Realism: límite más estricto
-        max_delta = 0.05  # ±5%
+        max_delta = 0.05
         extreme_high = torch.clamp(torch.abs(delta_high) - max_delta, min=0)
         extreme_low = torch.clamp(torch.abs(delta_low) - max_delta, min=0)
         extreme_close = torch.clamp(torch.abs(delta_close) - max_delta, min=0)
@@ -349,7 +318,6 @@ class ImprovedLoss(nn.Module):
         }
 
 def train_hybrid_model(model, train_loader, val_loader, device):
-    """Entrenamiento con seguimiento detallado"""
     print("\n" + "="*70)
     print("  🏋️ ENTRENAMIENTO CON SEGUIMIENTO DETALLADO")
     print("="*70)
@@ -362,6 +330,7 @@ def train_hybrid_model(model, train_loader, val_loader, device):
         weight_decay=Config.WEIGHT_DECAY
     )
     
+    # ✅ SIN PARÁMETRO VERBOSE
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=8
     )
@@ -376,10 +345,8 @@ def train_hybrid_model(model, train_loader, val_loader, device):
     print(f"   Batch Size: {Config.BATCH_SIZE}")
     print(f"   Grad Clip: {Config.GRAD_CLIP}")
     print(f"   Patience: {Config.PATIENCE}")
-    print(f"   Min Delta: {Config.MIN_DELTA}")
     print()
     
-    # Barra de progreso para épocas
     epoch_bar = tqdm(range(Config.EPOCHS), desc="Entrenando", unit="epoch")
     
     for epoch in epoch_bar:
@@ -421,10 +388,9 @@ def train_hybrid_model(model, train_loader, val_loader, device):
         val_loss /= len(val_loader)
         val_losses.append(val_loss)
         
-        # Scheduler
         scheduler.step(val_loss)
         
-        # Early stopping mejorado
+        # Early stopping
         improvement = best_val_loss - val_loss
         if improvement > Config.MIN_DELTA:
             best_val_loss = val_loss
@@ -434,7 +400,7 @@ def train_hybrid_model(model, train_loader, val_loader, device):
         else:
             patience_counter += 1
         
-        # Actualizar barra de progreso
+        # Actualizar barra
         current_lr = optimizer.param_groups[0]['lr']
         epoch_bar.set_postfix({
             'train': f'{train_loss:.4f}',
@@ -457,10 +423,8 @@ def train_hybrid_model(model, train_loader, val_loader, device):
         # Early stopping
         if patience_counter >= Config.PATIENCE:
             print(f"\n⏹️  Early stopping en época {epoch+1}")
-            print(f"   No hay mejora en {Config.PATIENCE} épocas")
             break
     
-    # Cargar mejor modelo
     if best_model_state:
         model.load_state_dict(best_model_state)
     
@@ -491,11 +455,9 @@ def evaluate_hybrid_model(model, test_loader, scaler_out, target_cols, device):
     predictions = np.array(predictions)
     targets = np.array(targets)
     
-    # Desnormalizar
     predictions_denorm = scaler_out.inverse_transform(predictions)
     targets_denorm = scaler_out.inverse_transform(targets)
     
-    # Métricas
     metrics = {}
     print()
     for i, col in enumerate(target_cols):
@@ -597,7 +559,6 @@ def main():
         print("  🚀 LSTM HÍBRIDO OPTIMIZADO PARA ADAUSD")
         print("="*70)
         
-        # Configuración
         print("\n⚙️  CONFIGURACIÓN OPTIMIZADA:")
         print(f"   Sequence Length: {Config.SEQ_LEN}")
         print(f"   Hidden Size: {Config.HIDDEN_SIZE}")
@@ -612,7 +573,6 @@ def main():
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"\n🖥️  Device: {device}")
         
-        # Descargar datos
         print("\n" + "="*70)
         print("  📥 DESCARGANDO DATOS")
         print("="*70)
@@ -637,7 +597,6 @@ def main():
         
         print(f"✅ Datos descargados: {len(df):,} velas")
         
-        # Preparar dataset
         (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
         scaler_in, scaler_out, feature_cols, target_cols = prepare_hybrid_dataset(df)
         
@@ -648,7 +607,6 @@ def main():
         print(f"   Input size: {input_size}")
         print(f"   Output size: {output_size}")
         
-        # DataLoaders
         train_dataset = torch.utils.data.TensorDataset(
             torch.FloatTensor(X_train_seq), 
             torch.FloatTensor(y_train_seq)
@@ -672,7 +630,6 @@ def main():
             test_dataset, batch_size=Config.BATCH_SIZE, shuffle=False
         )
         
-        # Crear modelo
         model = HybridLSTM(
             input_size=input_size,
             hidden_size=Config.HIDDEN_SIZE,
@@ -685,19 +642,16 @@ def main():
         total_params = sum(p.numel() for p in model.parameters())
         print(f"\n🧠 Modelo creado: {total_params:,} parámetros")
         
-        # Entrenar
         start_time = time.time()
         train_losses, val_losses = train_hybrid_model(model, train_loader, val_loader, device)
         training_time = time.time() - start_time
         
         print(f"\n⏱️  Tiempo de entrenamiento: {training_time/60:.1f} minutos")
         
-        # Evaluar
         predictions, targets, metrics = evaluate_hybrid_model(
             model, test_loader, scaler_out, target_cols, device
         )
         
-        # Resultados finales
         print("="*70)
         print("  📈 RESULTADOS FINALES")
         print("="*70)
@@ -709,10 +663,8 @@ def main():
         print(f"   R² promedio: {avg_r2:.4f}")
         print(f"   Accuracy direccional promedio: {avg_accuracy:.2f}%")
         
-        # Visualizar
         plot_hybrid_results(train_losses, val_losses, metrics, predictions, targets)
         
-        # Guardar modelo
         model_dir = 'ADAUSD_MODELS'
         os.makedirs(model_dir, exist_ok=True)
         
@@ -738,7 +690,6 @@ def main():
         joblib.dump(scaler_in, f'{model_dir}/scaler_input_hybrid.pkl')
         joblib.dump(scaler_out, f'{model_dir}/scaler_output_hybrid.pkl')
         
-        # Guardar config JSON
         json_config = {
             'input_size': input_size,
             'hidden_size': Config.HIDDEN_SIZE,
@@ -757,7 +708,6 @@ def main():
         
         print(f"\n💾 Modelo guardado en '{model_dir}/'")
         
-        # Telegram
         msg = f"""
 ✅ *LSTM Híbrido Optimizado*
 
@@ -789,7 +739,6 @@ def main():
         raise
 
 def send_telegram(msg):
-    """Envía mensaje a Telegram"""
     TELEGRAM_API = os.environ.get('TELEGRAM_API', '')
     CHAT_ID = os.environ.get('CHAT_ID', '')
     
