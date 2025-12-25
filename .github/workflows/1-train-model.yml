@@ -83,8 +83,8 @@ jobs:
           echo "📂 Verificando script..."
           SCRIPT_NAME=""
           
-          if [ -f "adausd_lstm_enhanced_ohlcv.py" ]; then
-            SCRIPT_NAME="adausd_lstm_enhanced_ohlcv.py"
+          if [ -f "adausd_lstm_ohlcv.py" ]; then
+            SCRIPT_NAME="adausd_lstm_ohlcv.py"
           elif [ -f "adausd_lstm_ohlcv.py" ]; then
             SCRIPT_NAME="adausd_lstm_ohlcv.py"
             echo "⚠️ Usando versión anterior (no mejorada)"
