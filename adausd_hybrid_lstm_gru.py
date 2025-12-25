@@ -566,7 +566,7 @@ def train_model(model, train_loader, val_loader, device):
     )
     
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=10, min_lr=1e-6, verbose=True
+        optimizer, mode='min', factor=0.5, patience=10, min_lr=1e-6
     )
     
     warmup_scheduler = optim.lr_scheduler.LinearLR(
