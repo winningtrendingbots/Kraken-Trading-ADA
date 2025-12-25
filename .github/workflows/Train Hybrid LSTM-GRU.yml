@@ -1,0 +1,353 @@
+name: 🔥 Train Hybrid LSTM-GRU
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # 3 AM UTC diario
+  workflow_dispatch:
+    inputs:
+      force_train:
+        description: 'Force training'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  train-hybrid-lstm-gru:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🔍 Check model age
+        id: check
+        run: |
+          echo "Checking Hybrid LSTM-GRU model age..."
+          
+          if [ "${{ github.event.inputs.force_train }}" = "true" ]; then
+            echo "🔧 Force training enabled"
+            echo "should_train=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if [ -d "ADAUSD_MODELS" ] && [ -f "ADAUSD_MODELS/hybrid_lstm_gru.pth" ]; then
+            last_train=$(stat -c %Y "ADAUSD_MODELS/hybrid_lstm_gru.pth")
+            current_time=$(date +%s)
+            age=$((current_time - last_train))
+            days=$((age / 86400))
+            
+            echo "📊 Model age: $days days"
+            
+            if [ $days -ge 7 ]; then
+              echo "🔄 Retraining needed (≥7 days)"
+              echo "should_train=true" >> $GITHUB_OUTPUT
+            else
+              echo "✅ Model still fresh ($days days)"
+              echo "should_train=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ Hybrid LSTM-GRU model not found"
+            echo "should_train=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 🐍 Setup Python
+        if: steps.check.outputs.should_train == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 📦 Install dependencies
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          echo "📦 Installing dependencies..."
+          pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: 🧠 Train Hybrid LSTM-GRU Model
+        if: steps.check.outputs.should_train == 'true'
+        env:
+          TELEGRAM_API: ${{ secrets.TELEGRAM_API }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          echo ""
+          echo "🔥 ================================================"
+          echo "   HYBRID LSTM ENCODER + GRU DECODER"
+          echo "================================================"
+          echo ""
+          
+          # Verify script
+          SCRIPT_NAME=""
+          if [ -f "adausd_hybrid_lstm_gru.py" ]; then
+            SCRIPT_NAME="adausd_hybrid_lstm_gru.py"
+          elif [ -f "hybrid_lstm_gru.py" ]; then
+            SCRIPT_NAME="hybrid_lstm_gru.py"
+          elif [ -f "adausd_encoder_decoder_lstm.py" ]; then
+            SCRIPT_NAME="adausd_encoder_decoder_lstm.py"
+            echo "⚠️ Using generic encoder-decoder (not optimized hybrid)"
+          else
+            echo "❌ Error: Hybrid script not found"
+            ls -la *.py 2>/dev/null || echo "No .py files in root"
+            find . -name "*hybrid*.py" -o -name "*encoder*.py" -type f
+            exit 1
+          fi
+          
+          echo "✅ Script: $SCRIPT_NAME"
+          echo ""
+          echo "🏗️  HYBRID ARCHITECTURE:"
+          echo "   🔹 Encoder: 2-layer Bi-LSTM (128 hidden)"
+          echo "   🔹 Decoder: 2-layer GRU (160 hidden)"
+          echo "   🔹 Bahdanau Attention mechanism"
+          echo "   🔹 Teacher Forcing: 40%"
+          echo "   🔹 Autoregressive generation"
+          echo ""
+          echo "✨ WHY HYBRID:"
+          echo "   • LSTM encoder: Better long-term memory"
+          echo "   • GRU decoder: Faster, less overfitting"
+          echo "   • Attention: Dynamic focus on history"
+          echo "   • Structured OHLCV generation"
+          echo ""
+          echo "⚙️  OPTIMIZED CONFIG:"
+          echo "   • SEQ_LEN: 120 (extended context)"
+          echo "   • Encoder Hidden: 128"
+          echo "   • Decoder Hidden: 160"
+          echo "   • Dropout: 0.25 (less regularization)"
+          echo "   • Batch: 96 (balanced)"
+          echo "   • LR: 0.00015 (careful learning)"
+          echo "   • Epochs: 220 (thorough training)"
+          echo ""
+          
+          python "$SCRIPT_NAME"
+          
+          echo ""
+          echo "✅ Training completed"
+      
+      - name: 📊 Validate metrics
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          echo ""
+          echo "🔍 Validating Encoder-Decoder metrics..."
+          
+          if [ ! -f "ADAUSD_MODELS/config_hybrid_lstm_gru.json" ]; then
+            echo "❌ Config file not found"
+            exit 0
+          fi
+          
+          echo "✅ Config found"
+          echo ""
+          echo "📊 MODEL METRICS:"
+          python3 <<'PYEOF'
+import json
+import sys
+
+try:
+    with open('ADAUSD_MODELS/config_hybrid_lstm_gru.json', 'r') as f:
+        config = json.load(f)
+    
+    metrics = config.get('metrics_test', {})
+    
+    if not metrics:
+        print("   ⚠️ No metrics available")
+        sys.exit(0)
+    
+    # Price targets
+    price_targets = ['delta_open', 'delta_high', 'delta_low', 'delta_close']
+    
+    print("   🎯 PRICE (OHLC):")
+    print("   Target          R²        MAE       Accuracy")
+    print("   -------------------------------------------------")
+    
+    price_r2_list = []
+    price_acc_list = []
+    
+    for target in price_targets:
+        if target in metrics:
+            data = metrics[target]
+            r2 = data.get('R2', 0)
+            mae = data.get('MAE', 0)
+            acc = data.get('Direction_Accuracy', 0)
+            print(f"   {target:14} {r2:8.4f}   {mae:8.6f}   {acc:6.2f}%")
+            price_r2_list.append(r2)
+            price_acc_list.append(acc)
+    
+    if price_r2_list:
+        avg_r2 = sum(price_r2_list) / len(price_r2_list)
+        avg_acc = sum(price_acc_list) / len(price_acc_list)
+        print(f"\n   📈 Average Price R²: {avg_r2:.4f}")
+        print(f"   🎯 Average Price Accuracy: {avg_acc:.2f}%")
+    
+    # Volume
+    if 'delta_volume' in metrics:
+        vol = metrics['delta_volume']
+        vol_r2 = vol.get('R2', 0)
+        vol_mae = vol.get('MAE', 0)
+        vol_acc = vol.get('Direction_Accuracy', 0)
+        print(f"\n   💧 VOLUME:")
+        print(f"   R²: {vol_r2:8.4f}")
+        print(f"   MAE: {vol_mae:8.6f}")
+        print(f"   Accuracy: {vol_acc:6.2f}%")
+    
+    # Evaluation
+    print("\n   📊 EVALUATION:")
+    if price_r2_list:
+        avg_r2 = sum(price_r2_list) / len(price_r2_list)
+        
+        if avg_r2 < 0:
+            print("   ⚠️  Negative R² - model not converging")
+            print("   💡 Suggestions:")
+            print("      - Increase training epochs")
+            print("      - Adjust teacher forcing ratio")
+            print("      - Check feature engineering")
+        elif avg_r2 < 0.2:
+            print("   ⚠️  Low R² - limited performance")
+        elif avg_r2 < 0.4:
+            print("   ✅ Acceptable R² - functional model")
+        elif avg_r2 < 0.6:
+            print("   ✅ Good R² - solid performance")
+        else:
+            print("   🎉 Excellent R² - high performance")
+        
+        avg_acc = sum(price_acc_list) / len(price_acc_list)
+        if avg_acc > 55:
+            print(f"   ✅ Good directional accuracy ({avg_acc:.1f}%)")
+        elif avg_acc > 52:
+            print(f"   ⚠️  Modest accuracy ({avg_acc:.1f}%)")
+        else:
+            print(f"   ⚠️  Low accuracy ({avg_acc:.1f}%)")
+    
+    # Architecture info
+    print("\n   🏗️  ARCHITECTURE:")
+    print(f"      Encoder: {config.get('encoder_layers', 2)}L × {config.get('encoder_hidden', 128)}h (LSTM)")
+    print(f"      Decoder: {config.get('decoder_layers', 2)}L × {config.get('decoder_hidden', 160)}h (GRU)")
+    print(f"      SEQ_LEN: {config.get('seq_len', 120)}")
+
+except FileNotFoundError:
+    print("   ❌ Config file not found")
+except Exception as e:
+    print(f"   ❌ Error: {e}")
+    import traceback
+    traceback.print_exc()
+PYEOF
+      
+      - name: 💾 Commit model
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add Hybrid LSTM-GRU files
+          git add ADAUSD_MODELS/hybrid_lstm_gru.pth 2>/dev/null || true
+          git add ADAUSD_MODELS/config_hybrid_lstm_gru.json 2>/dev/null || true
+          git add ADAUSD_MODELS/scaler_input_hybrid.pkl 2>/dev/null || true
+          git add ADAUSD_MODELS/scaler_output_price_hybrid.pkl 2>/dev/null || true
+          git add ADAUSD_MODELS/scaler_output_volume_hybrid.pkl 2>/dev/null || true
+          git add hybrid_lstm_gru_results.png 2>/dev/null || true
+          
+          if git diff --staged --quiet; then
+            echo "ℹ️ No changes to commit"
+          else
+            echo "📋 Files to commit:"
+            git diff --staged --name-only
+            
+            TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+            git commit -m "🔥 Hybrid LSTM-GRU trained: $TIMESTAMP"
+            
+            # Push with retry
+            MAX_RETRIES=3
+            for i in $(seq 1 $MAX_RETRIES); do
+              if git push; then
+                echo ""
+                echo "✅ Hybrid LSTM-GRU model saved to repository"
+                break
+              else
+                if [ $i -lt $MAX_RETRIES ]; then
+                  echo "⚠️ Retrying push ($i/$MAX_RETRIES)..."
+                  sleep 2
+                  git pull --rebase
+                else
+                  echo "❌ Failed to push after $MAX_RETRIES attempts"
+                  exit 1
+                fi
+              fi
+            done
+          fi
+      
+      - name: 📊 Summary
+        if: always()
+        run: |
+          echo ""
+          echo "╔═══════════════════════════════════════════════════════════════════╗"
+          if [ "${{ steps.check.outputs.should_train }}" = "true" ]; then
+            echo "  ✅ ENCODER-DECODER LSTM TRAINED"
+            echo ""
+            echo "📁 Generated files:"
+            
+            if [ -f "ADAUSD_MODELS/encoder_decoder_lstm.pth" ]; then
+              echo "   ✅ encoder_decoder_lstm.pth"
+            else
+              echo "   ❌ encoder_decoder_lstm.pth"
+            fi
+            
+            if [ -f "ADAUSD_MODELS/config_encoder_decoder.json" ]; then
+              echo "   ✅ config_encoder_decoder.json"
+              CONFIG_FILE="ADAUSD_MODELS/config_encoder_decoder.json"
+            else
+              CONFIG_FILE=""
+            fi
+            
+            if [ -f "encoder_decoder_results.png" ]; then
+              echo "   ✅ encoder_decoder_results.png"
+            fi
+            
+            # Show metrics summary
+            if [ -n "$CONFIG_FILE" ]; then
+              echo ""
+              echo "📊 Metrics summary:"
+              python3 <<'PYEOF'
+import json
+try:
+    with open('ADAUSD_MODELS/config_encoder_decoder.json', 'r') as f:
+        config = json.load(f)
+    
+    metrics = config.get('metrics_test', {})
+    if metrics:
+        price = ['delta_open', 'delta_high', 'delta_low', 'delta_close']
+        print("   🎯 PRICE:")
+        for t in price:
+            if t in metrics:
+                r2 = metrics[t].get('R2', 0)
+                acc = metrics[t].get('Direction_Accuracy', 0)
+                print(f"      {t:14} R²: {r2:6.4f}  Acc: {acc:5.2f}%")
+        
+        price_r2 = [metrics[t]['R2'] for t in price if t in metrics]
+        if price_r2:
+            print(f"\n   📈 Avg Price R²: {sum(price_r2)/len(price_r2):.4f}")
+        
+        if 'delta_volume' in metrics:
+            vol_r2 = metrics['delta_volume'].get('R2', 0)
+            vol_acc = metrics['delta_volume'].get('Direction_Accuracy', 0)
+            print(f"\n   💧 Volume: R²: {vol_r2:6.4f}  Acc: {vol_acc:5.2f}%")
+        
+        if 'training_time_minutes' in config:
+            print(f"\n   ⏱️  Time: {config['training_time_minutes']:.1f} min")
+        
+        if 'total_epochs' in config:
+            print(f"   🔄 Epochs: {config['total_epochs']}")
+except:
+    pass
+PYEOF
+            fi
+          else
+            echo "  ℹ️ TRAINING NOT NEEDED"
+            if [ -f "ADAUSD_MODELS/encoder_decoder_lstm.pth" ]; then
+              last_train=$(stat -c %Y "ADAUSD_MODELS/encoder_decoder_lstm.pth")
+              current_time=$(date +%s)
+              age=$((current_time - last_train))
+              days=$((age / 86400))
+              echo "  Current model is $days days old"
+            fi
+          fi
+          echo "╚═══════════════════════════════════════════════════════════════════╝"
