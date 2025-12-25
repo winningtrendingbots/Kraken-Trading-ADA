@@ -140,97 +140,97 @@ jobs:
           echo ""
           echo "📊 MODEL METRICS:"
           python3 <<'PYEOF'
-import json
-import sys
-
-try:
-    with open('ADAUSD_MODELS/config_hybrid_lstm_gru.json', 'r') as f:
-        config = json.load(f)
-    
-    metrics = config.get('metrics_test', {})
-    
-    if not metrics:
-        print("   ⚠️ No metrics available")
-        sys.exit(0)
-    
-    # Price targets
-    price_targets = ['delta_open', 'delta_high', 'delta_low', 'delta_close']
-    
-    print("   🎯 PRICE (OHLC):")
-    print("   Target          R²        MAE       Accuracy")
-    print("   -------------------------------------------------")
-    
-    price_r2_list = []
-    price_acc_list = []
-    
-    for target in price_targets:
-        if target in metrics:
-            data = metrics[target]
-            r2 = data.get('R2', 0)
-            mae = data.get('MAE', 0)
-            acc = data.get('Direction_Accuracy', 0)
-            print(f"   {target:14} {r2:8.4f}   {mae:8.6f}   {acc:6.2f}%")
-            price_r2_list.append(r2)
-            price_acc_list.append(acc)
-    
-    if price_r2_list:
-        avg_r2 = sum(price_r2_list) / len(price_r2_list)
-        avg_acc = sum(price_acc_list) / len(price_acc_list)
-        print(f"\n   📈 Average Price R²: {avg_r2:.4f}")
-        print(f"   🎯 Average Price Accuracy: {avg_acc:.2f}%")
-    
-    # Volume
-    if 'delta_volume' in metrics:
-        vol = metrics['delta_volume']
-        vol_r2 = vol.get('R2', 0)
-        vol_mae = vol.get('MAE', 0)
-        vol_acc = vol.get('Direction_Accuracy', 0)
-        print(f"\n   💧 VOLUME:")
-        print(f"   R²: {vol_r2:8.4f}")
-        print(f"   MAE: {vol_mae:8.6f}")
-        print(f"   Accuracy: {vol_acc:6.2f}%")
-    
-    # Evaluation
-    print("\n   📊 EVALUATION:")
-    if price_r2_list:
-        avg_r2 = sum(price_r2_list) / len(price_r2_list)
-        
-        if avg_r2 < 0:
-            print("   ⚠️  Negative R² - model not converging")
-            print("   💡 Suggestions:")
-            print("      - Increase training epochs")
-            print("      - Adjust teacher forcing ratio")
-            print("      - Check feature engineering")
-        elif avg_r2 < 0.2:
-            print("   ⚠️  Low R² - limited performance")
-        elif avg_r2 < 0.4:
-            print("   ✅ Acceptable R² - functional model")
-        elif avg_r2 < 0.6:
-            print("   ✅ Good R² - solid performance")
-        else:
-            print("   🎉 Excellent R² - high performance")
-        
-        avg_acc = sum(price_acc_list) / len(price_acc_list)
-        if avg_acc > 55:
-            print(f"   ✅ Good directional accuracy ({avg_acc:.1f}%)")
-        elif avg_acc > 52:
-            print(f"   ⚠️  Modest accuracy ({avg_acc:.1f}%)")
-        else:
-            print(f"   ⚠️  Low accuracy ({avg_acc:.1f}%)")
-    
-    # Architecture info
-    print("\n   🏗️  ARCHITECTURE:")
-    print(f"      Encoder: {config.get('encoder_layers', 2)}L × {config.get('encoder_hidden', 128)}h (LSTM)")
-    print(f"      Decoder: {config.get('decoder_layers', 2)}L × {config.get('decoder_hidden', 160)}h (GRU)")
-    print(f"      SEQ_LEN: {config.get('seq_len', 120)}")
-
-except FileNotFoundError:
-    print("   ❌ Config file not found")
-except Exception as e:
-    print(f"   ❌ Error: {e}")
-    import traceback
-    traceback.print_exc()
-PYEOF
+          import json
+          import sys
+          
+          try:
+              with open('ADAUSD_MODELS/config_hybrid_lstm_gru.json', 'r') as f:
+                  config = json.load(f)
+              
+              metrics = config.get('metrics_test', {})
+              
+              if not metrics:
+                  print("   ⚠️ No metrics available")
+                  sys.exit(0)
+              
+              # Price targets
+              price_targets = ['delta_open', 'delta_high', 'delta_low', 'delta_close']
+              
+              print("   🎯 PRICE (OHLC):")
+              print("   Target          R²        MAE       Accuracy")
+              print("   -------------------------------------------------")
+              
+              price_r2_list = []
+              price_acc_list = []
+              
+              for target in price_targets:
+                  if target in metrics:
+                      data = metrics[target]
+                      r2 = data.get('R2', 0)
+                      mae = data.get('MAE', 0)
+                      acc = data.get('Direction_Accuracy', 0)
+                      print(f"   {target:14} {r2:8.4f}   {mae:8.6f}   {acc:6.2f}%")
+                      price_r2_list.append(r2)
+                      price_acc_list.append(acc)
+              
+              if price_r2_list:
+                  avg_r2 = sum(price_r2_list) / len(price_r2_list)
+                  avg_acc = sum(price_acc_list) / len(price_acc_list)
+                  print(f"\n   📈 Average Price R²: {avg_r2:.4f}")
+                  print(f"   🎯 Average Price Accuracy: {avg_acc:.2f}%")
+              
+              # Volume
+              if 'delta_volume' in metrics:
+                  vol = metrics['delta_volume']
+                  vol_r2 = vol.get('R2', 0)
+                  vol_mae = vol.get('MAE', 0)
+                  vol_acc = vol.get('Direction_Accuracy', 0)
+                  print(f"\n   💧 VOLUME:")
+                  print(f"   R²: {vol_r2:8.4f}")
+                  print(f"   MAE: {vol_mae:8.6f}")
+                  print(f"   Accuracy: {vol_acc:6.2f}%")
+              
+              # Evaluation
+              print("\n   📊 EVALUATION:")
+              if price_r2_list:
+                  avg_r2 = sum(price_r2_list) / len(price_r2_list)
+                  
+                  if avg_r2 < 0:
+                      print("   ⚠️  Negative R² - model not converging")
+                      print("   💡 Suggestions:")
+                      print("      - Increase training epochs")
+                      print("      - Adjust teacher forcing ratio")
+                      print("      - Check feature engineering")
+                  elif avg_r2 < 0.2:
+                      print("   ⚠️  Low R² - limited performance")
+                  elif avg_r2 < 0.4:
+                      print("   ✅ Acceptable R² - functional model")
+                  elif avg_r2 < 0.6:
+                      print("   ✅ Good R² - solid performance")
+                  else:
+                      print("   🎉 Excellent R² - high performance")
+                  
+                  avg_acc = sum(price_acc_list) / len(price_acc_list)
+                  if avg_acc > 55:
+                      print(f"   ✅ Good directional accuracy ({avg_acc:.1f}%)")
+                  elif avg_acc > 52:
+                      print(f"   ⚠️  Modest accuracy ({avg_acc:.1f}%)")
+                  else:
+                      print(f"   ⚠️  Low accuracy ({avg_acc:.1f}%)")
+              
+              # Architecture info
+              print("\n   🏗️  ARCHITECTURE:")
+              print(f"      Encoder: {config.get('encoder_layers', 2)}L × {config.get('encoder_hidden', 128)}h (LSTM)")
+              print(f"      Decoder: {config.get('decoder_layers', 2)}L × {config.get('decoder_hidden', 160)}h (GRU)")
+              print(f"      SEQ_LEN: {config.get('seq_len', 120)}")
+          
+          except FileNotFoundError:
+              print("   ❌ Config file not found")
+          except Exception as e:
+              print(f"   ❌ Error: {e}")
+              import traceback
+              traceback.print_exc()
+          PYEOF
       
       - name: 💾 Commit model
         if: steps.check.outputs.should_train == 'true'
@@ -307,38 +307,38 @@ PYEOF
               echo ""
               echo "📊 Metrics summary:"
               python3 <<'PYEOF'
-import json
-try:
-    with open('ADAUSD_MODELS/config_encoder_decoder.json', 'r') as f:
-        config = json.load(f)
-    
-    metrics = config.get('metrics_test', {})
-    if metrics:
-        price = ['delta_open', 'delta_high', 'delta_low', 'delta_close']
-        print("   🎯 PRICE:")
-        for t in price:
-            if t in metrics:
-                r2 = metrics[t].get('R2', 0)
-                acc = metrics[t].get('Direction_Accuracy', 0)
-                print(f"      {t:14} R²: {r2:6.4f}  Acc: {acc:5.2f}%")
-        
-        price_r2 = [metrics[t]['R2'] for t in price if t in metrics]
-        if price_r2:
-            print(f"\n   📈 Avg Price R²: {sum(price_r2)/len(price_r2):.4f}")
-        
-        if 'delta_volume' in metrics:
-            vol_r2 = metrics['delta_volume'].get('R2', 0)
-            vol_acc = metrics['delta_volume'].get('Direction_Accuracy', 0)
-            print(f"\n   💧 Volume: R²: {vol_r2:6.4f}  Acc: {vol_acc:5.2f}%")
-        
-        if 'training_time_minutes' in config:
-            print(f"\n   ⏱️  Time: {config['training_time_minutes']:.1f} min")
-        
-        if 'total_epochs' in config:
-            print(f"   🔄 Epochs: {config['total_epochs']}")
-except:
-    pass
-PYEOF
+          import json
+          try:
+              with open('ADAUSD_MODELS/config_encoder_decoder.json', 'r') as f:
+                  config = json.load(f)
+              
+              metrics = config.get('metrics_test', {})
+              if metrics:
+                  price = ['delta_open', 'delta_high', 'delta_low', 'delta_close']
+                  print("   🎯 PRICE:")
+                  for t in price:
+                      if t in metrics:
+                          r2 = metrics[t].get('R2', 0)
+                          acc = metrics[t].get('Direction_Accuracy', 0)
+                          print(f"      {t:14} R²: {r2:6.4f}  Acc: {acc:5.2f}%")
+                  
+                  price_r2 = [metrics[t]['R2'] for t in price if t in metrics]
+                  if price_r2:
+                      print(f"\n   📈 Avg Price R²: {sum(price_r2)/len(price_r2):.4f}")
+                  
+                  if 'delta_volume' in metrics:
+                      vol_r2 = metrics['delta_volume'].get('R2', 0)
+                      vol_acc = metrics['delta_volume'].get('Direction_Accuracy', 0)
+                      print(f"\n   💧 Volume: R²: {vol_r2:6.4f}  Acc: {vol_acc:5.2f}%")
+                  
+                  if 'training_time_minutes' in config:
+                      print(f"\n   ⏱️  Time: {config['training_time_minutes']:.1f} min")
+                  
+                  if 'total_epochs' in config:
+                      print(f"   🔄 Epochs: {config['total_epochs']}")
+          except:
+              pass
+          PYEOF
             fi
           else
             echo "  ℹ️ TRAINING NOT NEEDED"
