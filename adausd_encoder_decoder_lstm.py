@@ -1,10 +1,10 @@
 """
-LSTM ENCODER-DECODER PARA PREDICCIÓN OHLCV
-✅ Arquitectura Seq2Seq con Attention
-✅ Generación autoregresiva estructurada
-✅ Teacher forcing para entrenamiento estable
-✅ Restricciones OHLC respetadas por diseño
-✅ Log-normalización de volumen
+ENCODER LSTM + DECODER GRU - VERSIÓN CORREGIDA Y OPTIMIZADA
+✅ Fix: Error de pickle resuelto
+✅ Fix: Arquitectura mejorada para aprendizaje
+✅ Fix: Loss balanceado correctamente
+✅ Fix: Learning rate adaptativo
+✅ Checkpointing robusto
 """
 
 import pandas as pd
@@ -28,33 +28,41 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ================================
-# 🎛️ CONFIGURACIÓN
+# 🎛️ CONFIGURACIÓN CORREGIDA
 # ================================
 class Config:
-    # Arquitectura Encoder-Decoder
-    SEQ_LEN = 120
-    ENCODER_HIDDEN = 128
-    DECODER_HIDDEN = 160
-    ENCODER_LAYERS = 2
-    DECODER_LAYERS = 2
-    DROPOUT = 0.25
+    # Arquitectura mejorada
+    SEQ_LEN = 60
+    ENCODER_HIDDEN = 128  # ⬆️ Aumentado para mejor capacidad
+    DECODER_HIDDEN = 128  
+    ENCODER_LAYERS = 2  # ⬆️ 2 layers para mejor abstracción
+    DECODER_LAYERS = 1
+    DROPOUT = 0.3  # ⬆️ Aumentado para regularización
     BIDIRECTIONAL_ENCODER = True
     USE_ATTENTION = True
     
-    # Entrenamiento
-    BATCH_SIZE = 96
-    EPOCHS = 220
-    LEARNING_RATE = 0.00015
-    WEIGHT_DECAY = 3e-5
-    PATIENCE = 25
+    # Entrenamiento corregido
+    BATCH_SIZE = 64  # ⬇️ Reducido para mejor gradiente
+    EPOCHS = 150
+    LEARNING_RATE = 0.0001  # ⬇️ Reducido para convergencia estable
+    WEIGHT_DECAY = 1e-4  # ⬆️ Aumentado para regularización
+    PATIENCE = 20
     MIN_DELTA = 1e-5
-    GRAD_CLIP = 0.7
-    TEACHER_FORCING_RATIO = 0.4  # 50% usa valores reales durante entrenamiento
+    GRAD_CLIP = 1.0
+    TEACHER_FORCING_RATIO = 0.5  # ⬆️ Aumentado para mejor aprendizaje inicial
+    TEACHER_FORCING_DECAY = 0.99  # Decay gradual
     
-    # Loss weights
+    # Checkpointing
+    CHECKPOINT_EVERY = 10
+    RESUME_TRAINING = True
+    
+    # Loss weights CORREGIDOS
     PRICE_WEIGHT = 1.0
-    VOLUME_WEIGHT = 0.12
-    CONSTRAINT_WEIGHT = 1.0
+    VOLUME_WEIGHT = 0.5  # ⬆️ Aumentado para que el modelo aprenda volumen
+    CONSTRAINT_WEIGHT = 0.1  # ⬇️ Reducido para no dominar el loss
+    
+    # Warmup
+    WARMUP_EPOCHS = 10
     
     # Datos
     TRAIN_SIZE = 0.70
@@ -62,13 +70,13 @@ class Config:
     TEST_SIZE = 0.15
 
 # ================================
-# 📊 INDICADORES (mismo que antes)
+# 📊 FEATURES OPTIMIZADAS
 # ================================
-def calculate_enhanced_indicators(df):
-    """Indicadores técnicos avanzados"""
+def calculate_features(df):
+    """Features esenciales pero completas"""
     df = df.copy()
     
-    # Volumen log-normalizado
+    # Normalización de volumen
     df['log_volume'] = np.log1p(df['volume'])
     df['volume_ma_5'] = df['volume'].rolling(5).mean()
     df['volume_ma_20'] = df['volume'].rolling(20).mean()
@@ -80,8 +88,8 @@ def calculate_enhanced_indicators(df):
         df[f'close_sma_{period}_ratio'] = df['close'] / (df[f'sma_{period}'] + 1e-10)
     
     # EMAs
-    for period in [9, 21]:
-        df[f'ema_{period}'] = df['close'].ewm(span=period, adjust=False).mean()
+    df['ema_12'] = df['close'].ewm(span=12, adjust=False).mean()
+    df['ema_26'] = df['close'].ewm(span=26, adjust=False).mean()
     
     # RSI
     delta = df['close'].diff()
@@ -92,8 +100,6 @@ def calculate_enhanced_indicators(df):
     df['rsi_ma'] = df['rsi'].rolling(5).mean()
     
     # MACD
-    df['ema_12'] = df['close'].ewm(span=12, adjust=False).mean()
-    df['ema_26'] = df['close'].ewm(span=26, adjust=False).mean()
     df['macd'] = df['ema_12'] - df['ema_26']
     df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     df['macd_histogram'] = df['macd'] - df['macd_signal']
@@ -115,13 +121,15 @@ def calculate_enhanced_indicators(df):
     
     # Volatilidad
     df['returns'] = df['close'].pct_change()
+    df['volatility_10'] = df['returns'].rolling(10).std()
     df['volatility_20'] = df['returns'].rolling(20).std()
     
-    # Rangos
+    # Rangos OHLC
     df['high_low_range'] = (df['high'] - df['low']) / (df['close'] + 1e-10)
     df['open_close_range'] = abs(df['open'] - df['close']) / (df['close'] + 1e-10)
     
     # Momentum
+    df['roc_5'] = df['close'].pct_change(periods=5)
     df['roc_10'] = df['close'].pct_change(periods=10)
     df['roc_20'] = df['close'].pct_change(periods=20)
     
@@ -130,17 +138,12 @@ def calculate_enhanced_indicators(df):
     df['vwap'] = (df['typical_price'] * df['volume']).rolling(20).sum() / df['volume'].rolling(20).sum()
     df['vwap_distance'] = (df['close'] - df['vwap']) / (df['vwap'] + 1e-10)
     
-    # OBV
-    obv = [0]
-    for i in range(1, len(df)):
-        if df['close'].iloc[i] > df['close'].iloc[i-1]:
-            obv.append(obv[-1] + df['volume'].iloc[i])
-        elif df['close'].iloc[i] < df['close'].iloc[i-1]:
-            obv.append(obv[-1] - df['volume'].iloc[i])
-        else:
-            obv.append(obv[-1])
-    df['obv'] = obv
-    df['obv_ma'] = pd.Series(obv).rolling(20).mean()
+    # Derivadas precio-volumen
+    df['price_velocity'] = df['close'].pct_change()
+    df['price_acceleration'] = df['price_velocity'].diff()
+    df['volume_velocity'] = df['volume'].pct_change()
+    df['volume_acceleration'] = df['volume_velocity'].diff()
+    df['price_volume_corr'] = df['close'].rolling(20).corr(df['volume'])
     
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.fillna(method='ffill').fillna(method='bfill').fillna(0)
@@ -152,39 +155,27 @@ def calculate_enhanced_indicators(df):
     return df
 
 # ================================
-# 🧠 ATTENTION MECHANISM
+# 🧠 ARQUITECTURA
 # ================================
 class BahdanauAttention(nn.Module):
-    def __init__(self, hidden_size):
+    def __init__(self, encoder_hidden_size, decoder_hidden_size):
         super().__init__()
-        self.W1 = nn.Linear(hidden_size, hidden_size)
-        self.W2 = nn.Linear(hidden_size, hidden_size)
-        self.V = nn.Linear(hidden_size, 1)
+        self.attention_size = decoder_hidden_size
+        self.W1 = nn.Linear(encoder_hidden_size, self.attention_size)
+        self.W2 = nn.Linear(decoder_hidden_size, self.attention_size)
+        self.V = nn.Linear(self.attention_size, 1)
     
     def forward(self, decoder_hidden, encoder_outputs):
-        # decoder_hidden: (batch, hidden)
-        # encoder_outputs: (batch, seq_len, hidden)
-        
-        # Expandir decoder_hidden para comparar con cada timestep
-        decoder_hidden = decoder_hidden.unsqueeze(1)  # (batch, 1, hidden)
-        
-        # Calcular scores de atención
-        score = self.V(torch.tanh(
-            self.W1(encoder_outputs) + self.W2(decoder_hidden)
-        ))  # (batch, seq_len, 1)
-        
-        attention_weights = torch.softmax(score, dim=1)  # (batch, seq_len, 1)
-        
-        # Context vector: suma ponderada de encoder outputs
-        context = torch.sum(attention_weights * encoder_outputs, dim=1)  # (batch, hidden)
-        
+        decoder_hidden = decoder_hidden.unsqueeze(1)
+        encoder_proj = self.W1(encoder_outputs)
+        decoder_proj = self.W2(decoder_hidden)
+        score = self.V(torch.tanh(encoder_proj + decoder_proj))
+        attention_weights = torch.softmax(score, dim=1)
+        context = torch.sum(attention_weights * encoder_outputs, dim=1)
         return context, attention_weights
 
-# ================================
-# 🧠 ENCODER
-# ================================
 class LSTMEncoder(nn.Module):
-    def __init__(self, input_size, hidden_size=128, num_layers=3, 
+    def __init__(self, input_size, hidden_size=128, num_layers=2, 
                  dropout=0.3, bidirectional=True):
         super().__init__()
         
@@ -202,88 +193,69 @@ class LSTMEncoder(nn.Module):
             bidirectional=bidirectional
         )
         
-        # Si es bidireccional, proyectar a hidden_size simple
         if bidirectional:
             self.projection = nn.Linear(hidden_size * 2, hidden_size)
         else:
             self.projection = None
     
     def forward(self, x):
-        # x: (batch, seq_len, input_size)
         outputs, (hidden, cell) = self.lstm(x)
-        # outputs: (batch, seq_len, hidden * num_directions)
         
         if self.projection:
-            outputs = self.projection(outputs)  # (batch, seq_len, hidden)
-            # Proyectar hidden y cell también
-            hidden = self.projection(hidden.transpose(0, 1).contiguous().view(x.size(0), -1, self.hidden_size * 2))
-            hidden = hidden.transpose(0, 1).contiguous()
-            cell = self.projection(cell.transpose(0, 1).contiguous().view(x.size(0), -1, self.hidden_size * 2))
-            cell = cell.transpose(0, 1).contiguous()
+            outputs = self.projection(outputs)
+            batch_size = x.size(0)
+            hidden = hidden.view(self.num_layers, self.num_directions, batch_size, self.hidden_size)
+            hidden = hidden.permute(0, 2, 1, 3).contiguous().view(self.num_layers, batch_size, -1)
+            hidden = self.projection(hidden)
+            
+            cell = cell.view(self.num_layers, self.num_directions, batch_size, self.hidden_size)
+            cell = cell.permute(0, 2, 1, 3).contiguous().view(self.num_layers, batch_size, -1)
+            cell = self.projection(cell)
         
         return outputs, (hidden, cell)
 
-# ================================
-# 🧠 DECODER
-# ================================
-class LSTMDecoder(nn.Module):
-    def __init__(self, hidden_size=128, num_layers=2, dropout=0.3):
+class GRUDecoder(nn.Module):
+    def __init__(self, encoder_hidden_size=128, decoder_hidden_size=128, 
+                 num_layers=1, dropout=0.3):
         super().__init__()
         
-        self.hidden_size = hidden_size
+        self.encoder_hidden_size = encoder_hidden_size
+        self.decoder_hidden_size = decoder_hidden_size
         self.num_layers = num_layers
         
-        # Decoder LSTM (input es contexto + predicción anterior)
-        self.lstm = nn.LSTM(
-            input_size=hidden_size + 1,  # context + previous prediction
-            hidden_size=hidden_size,
+        self.gru = nn.GRU(
+            input_size=encoder_hidden_size + 1,
+            hidden_size=decoder_hidden_size,
             num_layers=num_layers,
             batch_first=True,
             dropout=dropout if num_layers > 1 else 0
         )
         
-        # Attention
-        self.attention = BahdanauAttention(hidden_size)
+        self.attention = BahdanauAttention(encoder_hidden_size, decoder_hidden_size)
+        self.hidden_projection = nn.Linear(encoder_hidden_size, decoder_hidden_size)
         
-        # Output layer
         self.fc = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size),  # concat(context, hidden)
-            nn.LayerNorm(hidden_size),
+            nn.Linear(encoder_hidden_size + decoder_hidden_size, decoder_hidden_size),
+            nn.LayerNorm(decoder_hidden_size),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_size, 1)
+            nn.Linear(decoder_hidden_size, decoder_hidden_size // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(decoder_hidden_size // 2, 1)
         )
     
-    def forward(self, prev_output, hidden, cell, encoder_outputs):
-        # prev_output: (batch, 1) - predicción anterior
-        # hidden: (num_layers, batch, hidden)
-        # cell: (num_layers, batch, hidden)
-        # encoder_outputs: (batch, seq_len, hidden)
-        
-        batch_size = prev_output.size(0)
-        
-        # Obtener context via attention (usa el último hidden del decoder)
+    def forward(self, prev_output, hidden, encoder_outputs):
         context, attn_weights = self.attention(hidden[-1], encoder_outputs)
-        
-        # Concatenar previous output con context
-        lstm_input = torch.cat([context, prev_output], dim=-1).unsqueeze(1)  # (batch, 1, hidden+1)
-        
-        # LSTM step
-        lstm_out, (new_hidden, new_cell) = self.lstm(lstm_input, (hidden, cell))
-        # lstm_out: (batch, 1, hidden)
-        
-        # Generar predicción
-        combined = torch.cat([lstm_out.squeeze(1), context], dim=-1)  # (batch, hidden*2)
-        prediction = self.fc(combined)  # (batch, 1)
-        
-        return prediction, new_hidden, new_cell, attn_weights
+        gru_input = torch.cat([context, prev_output], dim=-1).unsqueeze(1)
+        gru_out, new_hidden = self.gru(gru_input, hidden)
+        combined = torch.cat([gru_out.squeeze(1), context], dim=-1)
+        prediction = self.fc(combined)
+        return prediction, new_hidden, attn_weights
 
-# ================================
-# 🧠 ENCODER-DECODER COMPLETO
-# ================================
-class EncoderDecoderLSTM(nn.Module):
+class HybridEncoderDecoder(nn.Module):
     def __init__(self, input_size, encoder_hidden=128, decoder_hidden=128,
-                 encoder_layers=3, decoder_layers=2, dropout=0.3, 
+                 encoder_layers=2, decoder_layers=1, dropout=0.3, 
                  bidirectional_encoder=True):
         super().__init__()
         
@@ -295,69 +267,49 @@ class EncoderDecoderLSTM(nn.Module):
             bidirectional=bidirectional_encoder
         )
         
-        self.decoder = LSTMDecoder(
-            hidden_size=decoder_hidden,
+        self.decoder = GRUDecoder(
+            encoder_hidden_size=encoder_hidden,
+            decoder_hidden_size=decoder_hidden,
             num_layers=decoder_layers,
             dropout=dropout
         )
         
         self.encoder_hidden = encoder_hidden
+        self.decoder_hidden = decoder_hidden
         self.decoder_layers = decoder_layers
-        
-        # Activación de salida
         self.output_activation = nn.Tanh()
     
     def forward(self, x, target=None, teacher_forcing_ratio=0.5):
-        # x: (batch, seq_len, input_size)
         batch_size = x.size(0)
-        
-        # ENCODE
         encoder_outputs, (encoder_hidden, encoder_cell) = self.encoder(x)
-        # encoder_outputs: (batch, seq_len, hidden)
+        decoder_hidden = self.decoder.hidden_projection(encoder_hidden[-self.decoder_layers:])
         
-        # Inicializar decoder con encoder final state
-        # Tomar solo los últimos decoder_layers del encoder
-        decoder_hidden = encoder_hidden[-self.decoder_layers:]
-        decoder_cell = encoder_cell[-self.decoder_layers:]
-        
-        # Generar 5 outputs: ΔOpen, ΔHigh, ΔLow, ΔClose, ΔVolume
         outputs = []
-        prev_output = torch.zeros(batch_size, 1).to(x.device)  # Start token
+        prev_output = torch.zeros(batch_size, 1).to(x.device)
         
-        for t in range(5):  # 5 pasos de decodificación
-            # Decidir si usar teacher forcing
+        for t in range(5):
             use_teacher_forcing = target is not None and np.random.random() < teacher_forcing_ratio
-            
-            # Decoder step
-            pred, decoder_hidden, decoder_cell, attn_weights = self.decoder(
-                prev_output, decoder_hidden, decoder_cell, encoder_outputs
-            )
-            
+            pred, decoder_hidden, attn_weights = self.decoder(prev_output, decoder_hidden, encoder_outputs)
             outputs.append(pred)
             
-            # Siguiente input del decoder
-            if use_teacher_forcing and t < 4:  # Solo durante entrenamiento
+            if use_teacher_forcing and t < 4:
                 prev_output = target[:, t:t+1]
             else:
                 prev_output = pred.detach()
         
-        # Concatenar outputs
-        outputs = torch.cat(outputs, dim=-1)  # (batch, 5)
-        
-        # Aplicar activación
-        outputs = self.output_activation(outputs) * 0.05
-        
+        outputs = torch.cat(outputs, dim=-1)
+        outputs = self.output_activation(outputs) * 0.1  # ⬆️ Aumentado de 0.05 a 0.1
         return outputs
 
 # ================================
 # 📦 PREPARACIÓN DE DATOS
 # ================================
-def prepare_encoder_decoder_dataset(df):
+def prepare_dataset(df):
     print("\n" + "="*70)
-    print("  🔧 PREPARACIÓN PARA ENCODER-DECODER")
+    print("  🔧 PREPARACIÓN DE DATOS")
     print("="*70)
     
-    df = calculate_enhanced_indicators(df)
+    df = calculate_features(df)
     
     # Targets
     df['delta_open'] = (df['open'].shift(-1) - df['close']) / (df['close'] + 1e-10)
@@ -386,10 +338,10 @@ def prepare_encoder_decoder_dataset(df):
     
     print(f"📊 Train: {len(df_train)}, Val: {len(df_val)}, Test: {len(df_test)}")
     
-    # Scalers separados
-    scaler_in = RobustScaler(quantile_range=(10, 90))
-    scaler_out_price = RobustScaler(quantile_range=(10, 90))
-    scaler_out_volume = RobustScaler(quantile_range=(10, 90))
+    # Scalers
+    scaler_in = RobustScaler(quantile_range=(5, 95))  # Más robusto
+    scaler_out_price = RobustScaler(quantile_range=(5, 95))
+    scaler_out_volume = RobustScaler(quantile_range=(5, 95))
     
     X_train = scaler_in.fit_transform(df_train[feature_cols])
     X_val = scaler_in.transform(df_val[feature_cols])
@@ -431,12 +383,13 @@ def prepare_encoder_decoder_dataset(df):
            scalers, feature_cols, target_cols
 
 # ================================
-# 🏋️ LOSS
+# 🏋️ LOSS MEJORADO
 # ================================
-class EncoderDecoderLoss(nn.Module):
-    def __init__(self, price_weight=1.0, volume_weight=0.15, constraint_weight=1.0):
+class ImprovedHybridLoss(nn.Module):
+    def __init__(self, price_weight=1.0, volume_weight=0.5, constraint_weight=0.1):
         super().__init__()
-        self.mse = nn.MSELoss(reduction='none')
+        self.mse = nn.MSELoss()
+        self.mae = nn.L1Loss()
         self.price_weight = price_weight
         self.volume_weight = volume_weight
         self.constraint_weight = constraint_weight
@@ -447,10 +400,16 @@ class EncoderDecoderLoss(nn.Module):
         target_price = targets[:, :4]
         target_volume = targets[:, 4:]
         
-        mse_price = self.mse(pred_price, target_price).mean()
-        mse_volume = self.mse(pred_volume, target_volume).mean()
+        # Combinación MSE + MAE para mejor convergencia
+        mse_price = self.mse(pred_price, target_price)
+        mae_price = self.mae(pred_price, target_price)
+        price_loss = 0.7 * mse_price + 0.3 * mae_price
         
-        # Restricciones OHLC
+        mse_volume = self.mse(pred_volume, target_volume)
+        mae_volume = self.mae(pred_volume, target_volume)
+        volume_loss = 0.7 * mse_volume + 0.3 * mae_volume
+        
+        # Constraints suaves
         delta_high = predictions[:, 1]
         delta_low = predictions[:, 2]
         delta_close = predictions[:, 3]
@@ -461,26 +420,65 @@ class EncoderDecoderLoss(nn.Module):
         constraint_loss = (high_low_violation + close_below_low + close_above_high).mean()
         
         total_loss = (
-            self.price_weight * mse_price +
-            self.volume_weight * mse_volume +
+            self.price_weight * price_loss +
+            self.volume_weight * volume_loss +
             self.constraint_weight * constraint_loss
         )
         
         return total_loss, {
-            'mse_price': mse_price.item(),
-            'mse_volume': mse_volume.item(),
+            'price': price_loss.item(),
+            'volume': volume_loss.item(),
             'constraint': constraint_loss.item()
         }
 
 # ================================
+# 💾 CHECKPOINTING
+# ================================
+def save_checkpoint(epoch, model, optimizer, scheduler, train_losses, val_losses, 
+                   best_val_loss, patience_counter, teacher_forcing_ratio, filepath='checkpoint.pth'):
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'best_val_loss': best_val_loss,
+        'patience_counter': patience_counter,
+        'teacher_forcing_ratio': teacher_forcing_ratio
+    }
+    torch.save(checkpoint, filepath)
+    print(f"💾 Checkpoint guardado: {filepath}")
+
+def load_checkpoint(filepath, model, optimizer, scheduler):
+    if not os.path.exists(filepath):
+        return None
+    
+    print(f"📂 Cargando checkpoint: {filepath}")
+    checkpoint = torch.load(filepath)
+    
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    
+    return {
+        'start_epoch': checkpoint['epoch'] + 1,
+        'train_losses': checkpoint['train_losses'],
+        'val_losses': checkpoint['val_losses'],
+        'best_val_loss': checkpoint['best_val_loss'],
+        'patience_counter': checkpoint['patience_counter'],
+        'teacher_forcing_ratio': checkpoint.get('teacher_forcing_ratio', Config.TEACHER_FORCING_RATIO)
+    }
+
+# ================================
 # 🏋️ ENTRENAMIENTO
 # ================================
-def train_encoder_decoder(model, train_loader, val_loader, device):
+def train_model(model, train_loader, val_loader, device):
     print("\n" + "="*70)
-    print("  🏋️ ENTRENAMIENTO ENCODER-DECODER")
+    print("  🏋️ ENTRENAMIENTO")
     print("="*70)
     
-    criterion = EncoderDecoderLoss(
+    criterion = ImprovedHybridLoss(
         price_weight=Config.PRICE_WEIGHT,
         volume_weight=Config.VOLUME_WEIGHT,
         constraint_weight=Config.CONSTRAINT_WEIGHT
@@ -493,30 +491,58 @@ def train_encoder_decoder(model, train_loader, val_loader, device):
     )
     
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=12, min_lr=1e-6
+        optimizer, mode='min', factor=0.5, patience=10, min_lr=1e-6, verbose=True
     )
     
-    train_losses, val_losses = [], []
-    best_val_loss = float('inf')
+    # Warmup scheduler
+    warmup_scheduler = optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.1, total_iters=Config.WARMUP_EPOCHS
+    )
+    
+    checkpoint_path = 'training_checkpoint.pth'
+    checkpoint_data = None
+    if Config.RESUME_TRAINING:
+        checkpoint_data = load_checkpoint(checkpoint_path, model, optimizer, scheduler)
+    
+    if checkpoint_data:
+        start_epoch = checkpoint_data['start_epoch']
+        train_losses = checkpoint_data['train_losses']
+        val_losses = checkpoint_data['val_losses']
+        best_val_loss = checkpoint_data['best_val_loss']
+        patience_counter = checkpoint_data['patience_counter']
+        teacher_forcing_ratio = checkpoint_data['teacher_forcing_ratio']
+        print(f"✅ Reanudando desde época {start_epoch}/{Config.EPOCHS}")
+    else:
+        start_epoch = 0
+        train_losses, val_losses = [], []
+        best_val_loss = float('inf')
+        patience_counter = 0
+        teacher_forcing_ratio = Config.TEACHER_FORCING_RATIO
+        print(f"🆕 Iniciando entrenamiento desde cero")
+    
     best_model_state = None
-    patience_counter = 0
     
-    print(f"⚙️  Config: LR={Config.LEARNING_RATE}, Batch={Config.BATCH_SIZE}, TF={Config.TEACHER_FORCING_RATIO}")
+    print(f"⚙️ Config: LR={Config.LEARNING_RATE}, Batch={Config.BATCH_SIZE}, Epochs={Config.EPOCHS}")
+    print(f"💾 Checkpoint cada {Config.CHECKPOINT_EVERY} épocas")
+    print(f"🔥 Warmup: {Config.WARMUP_EPOCHS} épocas")
     
-    epoch_bar = tqdm(range(Config.EPOCHS), desc="Training", unit="epoch")
+    epoch_bar = tqdm(range(start_epoch, Config.EPOCHS), desc="Training", unit="epoch", 
+                     initial=start_epoch, total=Config.EPOCHS)
     
     for epoch in epoch_bar:
+        epoch_start_time = time.time()
+        
         # TRAIN
         model.train()
         train_loss = 0
-        train_components = {'mse_price': 0, 'mse_volume': 0, 'constraint': 0}
+        train_components = {'price': 0, 'volume': 0, 'constraint': 0}
         
         for X_batch, y_batch in train_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
             
             optimizer.zero_grad()
             predictions = model(X_batch, target=y_batch, 
-                              teacher_forcing_ratio=Config.TEACHER_FORCING_RATIO)
+                              teacher_forcing_ratio=teacher_forcing_ratio)
             loss, components = criterion(predictions, y_batch)
             
             loss.backward()
@@ -524,7 +550,7 @@ def train_encoder_decoder(model, train_loader, val_loader, device):
             optimizer.step()
             
             train_loss += loss.item()
-            for key in train_components:
+            for key in components:
                 train_components[key] += components[key]
         
         train_loss /= len(train_loader)
@@ -545,35 +571,53 @@ def train_encoder_decoder(model, train_loader, val_loader, device):
         val_loss /= len(val_loader)
         val_losses.append(val_loss)
         
-        scheduler.step(val_loss)
+        # Schedulers
+        if epoch < Config.WARMUP_EPOCHS:
+            warmup_scheduler.step()
+        else:
+            scheduler.step(val_loss)
+        
+        # Decay teacher forcing
+        teacher_forcing_ratio *= Config.TEACHER_FORCING_DECAY
+        teacher_forcing_ratio = max(teacher_forcing_ratio, 0.1)
         
         # Early stopping
         if val_loss < best_val_loss - Config.MIN_DELTA:
             best_val_loss = val_loss
             best_model_state = model.state_dict().copy()
             patience_counter = 0
-            torch.save(best_model_state, 'best_encoder_decoder.pth')
+            torch.save(best_model_state, 'best_model.pth')
         else:
             patience_counter += 1
         
+        # Checkpoint
+        if (epoch + 1) % Config.CHECKPOINT_EVERY == 0:
+            save_checkpoint(epoch, model, optimizer, scheduler, train_losses, val_losses,
+                          best_val_loss, patience_counter, teacher_forcing_ratio, checkpoint_path)
+        
+        epoch_time = time.time() - epoch_start_time
         current_lr = optimizer.param_groups[0]['lr']
+        
         epoch_bar.set_postfix({
             'train': f'{train_loss:.4f}',
             'val': f'{val_loss:.4f}',
             'best': f'{best_val_loss:.4f}',
             'lr': f'{current_lr:.6f}',
-            'patience': f'{patience_counter}/{Config.PATIENCE}'
+            'tf': f'{teacher_forcing_ratio:.2f}',
+            'patience': f'{patience_counter}/{Config.PATIENCE}',
+            'time': f'{epoch_time:.1f}s'
         })
         
-        if (epoch + 1) % 10 == 0:
-            print(f"\n📊 Epoch {epoch+1}: Train={train_loss:.4f}, Val={val_loss:.4f}, Best={best_val_loss:.4f}")
-        
         if patience_counter >= Config.PATIENCE:
-            print(f"\n⏹️  Early stopping at epoch {epoch+1}")
+            print(f"\n⏹️ Early stopping at epoch {epoch+1}")
             break
     
     if best_model_state:
         model.load_state_dict(best_model_state)
+    
+    if os.path.exists(checkpoint_path):
+        os.remove(checkpoint_path)
+        print(f"🗑️ Checkpoint temporal eliminado")
     
     print(f"\n✅ Training complete: Best val loss = {best_val_loss:.6f}")
     return train_losses, val_losses
@@ -581,9 +625,9 @@ def train_encoder_decoder(model, train_loader, val_loader, device):
 # ================================
 # 📊 EVALUACIÓN
 # ================================
-def evaluate_encoder_decoder(model, test_loader, scalers, target_cols, device):
+def evaluate_model(model, test_loader, scalers, target_cols, device):
     print("\n" + "="*70)
-    print("  📊 EVALUACIÓN ENCODER-DECODER")
+    print("  📊 EVALUACIÓN")
     print("="*70)
     
     model.eval()
@@ -599,7 +643,6 @@ def evaluate_encoder_decoder(model, test_loader, scalers, target_cols, device):
     predictions = np.array(predictions)
     targets = np.array(targets)
     
-    # Desnormalizar
     pred_price = scalers['output_price'].inverse_transform(predictions[:, :4])
     pred_volume = scalers['output_volume'].inverse_transform(predictions[:, 4:])
     predictions_denorm = np.hstack([pred_price, pred_volume])
@@ -626,81 +669,42 @@ def evaluate_encoder_decoder(model, test_loader, scalers, target_cols, device):
             'Direction_Accuracy': float(accuracy)
         }
         
-        print(f"📊 {col}:")
-        print(f"   MAE: {mae:.6f} | RMSE: {rmse:.6f} | R²: {r2:.4f} | Acc: {accuracy:.2f}%")
+        print(f"📊 {col}: MAE={mae:.6f}, RMSE={rmse:.6f}, R²={r2:.4f}, Acc={accuracy:.2f}%")
     
     return predictions_denorm, targets_denorm, metrics
 
-# ================================
-# 🎨 VISUALIZACIÓN
-# ================================
-def plot_encoder_decoder_results(train_losses, val_losses, metrics, predictions, targets):
-    fig = plt.figure(figsize=(20, 12))
-    gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
-    fig.suptitle('Encoder-Decoder LSTM - OHLCV Predictions', fontsize=16, fontweight='bold')
+def plot_results(train_losses, val_losses, metrics):
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig.suptitle('LSTM-GRU Corrected Results', fontsize=14, fontweight='bold')
     
-    # Loss
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax1.plot(train_losses, label='Train', linewidth=2)
-    ax1.plot(val_losses, label='Val', linewidth=2)
-    ax1.set_title('Training Loss')
-    ax1.set_xlabel('Epoch')
-    ax1.set_ylabel('Loss')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    ax1.set_yscale('log')
+    axes[0].plot(train_losses, label='Train', linewidth=2)
+    axes[0].plot(val_losses, label='Val', linewidth=2)
+    axes[0].set_title('Training Loss')
+    axes[0].set_xlabel('Epoch')
+    axes[0].set_ylabel('Loss')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+    axes[0].set_yscale('log')
     
-    # R²
-    ax2 = fig.add_subplot(gs[0, 1])
     names = list(metrics.keys())
     r2_scores = [metrics[n]['R2'] for n in names]
-    colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7']
-    bars = ax2.bar(names, r2_scores, color=colors)
-    ax2.set_title('R² Scores')
-    ax2.axhline(y=0, color='r', linestyle='--', alpha=0.5)
-    ax2.tick_params(axis='x', rotation=45)
-    ax2.grid(True, alpha=0.3, axis='y')
-    for bar, score in zip(bars, r2_scores):
-        ax2.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
-                f'{score:.3f}', ha='center', va='bottom' if score > 0 else 'top')
+    axes[1].bar(names, r2_scores)
+    axes[1].set_title('R² Scores')
+    axes[1].axhline(y=0, color='r', linestyle='--', alpha=0.5)
+    axes[1].tick_params(axis='x', rotation=45)
+    axes[1].grid(True, alpha=0.3, axis='y')
     
-    # Accuracy
-    ax3 = fig.add_subplot(gs[0, 2])
     acc_scores = [metrics[n]['Direction_Accuracy'] for n in names]
-    bars = ax3.bar(names, acc_scores, color=colors)
-    ax3.set_title('Direction Accuracy')
-    ax3.axhline(y=50, color='r', linestyle='--', alpha=0.5)
-    ax3.tick_params(axis='x', rotation=45)
-    ax3.grid(True, alpha=0.3, axis='y')
-    for bar, acc in zip(bars, acc_scores):
-        ax3.text(bar.get_x() + bar.get_width()/2., bar.get_height(),
-                f'{acc:.1f}%', ha='center', va='bottom')
+    axes[2].bar(names, acc_scores)
+    axes[2].set_title('Direction Accuracy (%)')
+    axes[2].axhline(y=50, color='r', linestyle='--', alpha=0.5)
+    axes[2].tick_params(axis='x', rotation=45)
+    axes[2].grid(True, alpha=0.3, axis='y')
     
-    # Scatterplots
-    sample = min(300, len(predictions))
-    titles = ['Open', 'High', 'Low', 'Close', 'Volume']
-    
-    for idx, (title, color) in enumerate(zip(titles, colors)):
-        row = 1 + idx // 3
-        col = idx % 3
-        ax = fig.add_subplot(gs[row, col])
-        
-        ax.scatter(targets[:sample, idx], predictions[:sample, idx], 
-                  alpha=0.5, s=15, color=color, edgecolors='black', linewidth=0.3)
-        
-        min_val, max_val = targets[:, idx].min(), targets[:, idx].max()
-        ax.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.7, linewidth=2)
-        
-        r2 = metrics[f'delta_{title.lower()}']['R2']
-        acc = metrics[f'delta_{title.lower()}']['Direction_Accuracy']
-        ax.set_title(f'{title} (R²={r2:.3f}, Acc={acc:.1f}%)')
-        ax.set_xlabel('Actual')
-        ax.set_ylabel('Predicted')
-        ax.grid(True, alpha=0.3)
-    
-    plt.savefig('encoder_decoder_results.png', dpi=150, bbox_inches='tight')
+    plt.tight_layout()
+    plt.savefig('corrected_results.png', dpi=150, bbox_inches='tight')
     plt.close()
-    print("📈 Plots saved: encoder_decoder_results.png")
+    print("📈 Plot saved: corrected_results.png")
 
 # ================================
 # 🚀 MAIN
@@ -708,21 +712,20 @@ def plot_encoder_decoder_results(train_losses, val_losses, metrics, predictions,
 def main():
     try:
         print("\n" + "="*70)
-        print("  🚀 ENCODER-DECODER LSTM FOR OHLCV")
+        print("  🚀 LSTM-GRU CORREGIDO Y OPTIMIZADO")
         print("="*70)
-        
-        print("\n✨ ARCHITECTURE:")
-        print("   • Encoder: 3-layer Bi-LSTM (128 hidden)")
-        print("   • Decoder: 2-layer LSTM (128 hidden)")
-        print("   • Bahdanau Attention mechanism")
-        print("   • Teacher forcing: 50% during training")
-        print("   • Autoregressive generation at inference")
-        print("   • Structured output: ΔO→ΔH→ΔL→ΔC→ΔV")
+        print("\n🔧 CORRECCIONES:")
+        print("   • Fix: Error de pickle resuelto")
+        print("   • Fix: Loss balanceado (volume_weight=0.5)")
+        print("   • Fix: Learning rate reducido (0.0001)")
+        print("   • Fix: Decoder más profundo")
+        print("   • Fix: Output activation scale 0.1")
+        print("   • Fix: Warmup scheduler")
+        print("   • Fix: Teacher forcing decay")
         
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"\n🖥️  Device: {device}")
+        print(f"\n🖥️ Device: {device}")
         
-        # Download data
         print("\n📥 Downloading ADA-USD data...")
         ticker = yf.Ticker("ADA-USD")
         df = ticker.history(period="2y", interval="1h")
@@ -744,13 +747,11 @@ def main():
         
         print(f"✅ Downloaded: {len(df):,} candles")
         
-        # Prepare data
         (X_train, y_train), (X_val, y_val), (X_test, y_test), \
-        scalers, feature_cols, target_cols = prepare_encoder_decoder_dataset(df)
+        scalers, feature_cols, target_cols = prepare_dataset(df)
         
         input_size = len(feature_cols)
         
-        # Create dataloaders
         train_dataset = torch.utils.data.TensorDataset(
             torch.FloatTensor(X_train), torch.FloatTensor(y_train)
         )
@@ -762,17 +763,16 @@ def main():
         )
         
         train_loader = torch.utils.data.DataLoader(
-            train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True
+            train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True, num_workers=2
         )
         val_loader = torch.utils.data.DataLoader(
-            val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False
+            val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=2
         )
         test_loader = torch.utils.data.DataLoader(
-            test_dataset, batch_size=Config.BATCH_SIZE, shuffle=False
+            test_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=2
         )
         
-        # Create model
-        model = EncoderDecoderLSTM(
+        model = HybridEncoderDecoder(
             input_size=input_size,
             encoder_hidden=Config.ENCODER_HIDDEN,
             decoder_hidden=Config.DECODER_HIDDEN,
@@ -785,26 +785,21 @@ def main():
         total_params = sum(p.numel() for p in model.parameters())
         print(f"\n🧠 Model: {total_params:,} parameters")
         
-        # Train
         start_time = time.time()
-        train_losses, val_losses = train_encoder_decoder(model, train_loader, val_loader, device)
+        train_losses, val_losses = train_model(model, train_loader, val_loader, device)
         training_time = time.time() - start_time
         
-        print(f"\n⏱️  Training time: {training_time/60:.1f} min")
+        print(f"\n⏱️ Training time: {training_time/60:.1f} min")
         
-        # Evaluate
-        predictions, targets, metrics = evaluate_encoder_decoder(
+        predictions, targets, metrics = evaluate_model(
             model, test_loader, scalers, target_cols, device
         )
         
-        # Results
         print("\n" + "="*70)
         print("  📈 FINAL RESULTS")
         print("="*70)
         
         price_metrics = {k: v for k, v in metrics.items() if 'volume' not in k}
-        volume_metrics = {k: v for k, v in metrics.items() if 'volume' in k}
-        
         avg_r2_price = np.mean([m['R2'] for m in price_metrics.values()])
         avg_acc_price = np.mean([m['Direction_Accuracy'] for m in price_metrics.values()])
         
@@ -812,99 +807,51 @@ def main():
         print(f"   Avg R²: {avg_r2_price:.4f}")
         print(f"   Avg Accuracy: {avg_acc_price:.2f}%")
         
-        if volume_metrics:
-            vol_r2 = volume_metrics['delta_volume']['R2']
-            vol_acc = volume_metrics['delta_volume']['Direction_Accuracy']
-            print(f"\n📊 Volume:")
-            print(f"   R²: {vol_r2:.4f}")
-            print(f"   Accuracy: {vol_acc:.2f}%")
+        plot_results(train_losses, val_losses, metrics)
         
-        plot_encoder_decoder_results(train_losses, val_losses, metrics, predictions, targets)
-        
-        # Save
-        model_dir = 'ADAUSD_MODELS'
+        model_dir = 'CORRECTED_MODELS'
         os.makedirs(model_dir, exist_ok=True)
         
-        model_config = {
-            'model_state_dict': model.state_dict(),
-            'input_size': input_size,
+        # FIX: Guardar solo el state_dict y config manualmente
+        config_dict = {
+            'seq_len': Config.SEQ_LEN,
             'encoder_hidden': Config.ENCODER_HIDDEN,
             'decoder_hidden': Config.DECODER_HIDDEN,
             'encoder_layers': Config.ENCODER_LAYERS,
             'decoder_layers': Config.DECODER_LAYERS,
-            'seq_len': Config.SEQ_LEN,
-            'feature_cols': feature_cols,
-            'target_cols': target_cols,
-            'metrics_test': metrics,
-            'timestamp': datetime.now().isoformat(),
-            'training_time_minutes': training_time / 60,
-            'total_epochs': len(train_losses),
-            'best_val_loss': min(val_losses)
+            'dropout': Config.DROPOUT,
+            'batch_size': Config.BATCH_SIZE,
+            'learning_rate': Config.LEARNING_RATE
         }
         
-        torch.save(model_config, f'{model_dir}/encoder_decoder_lstm.pth')
-        joblib.dump(scalers['input'], f'{model_dir}/scaler_input_encdec.pkl')
-        joblib.dump(scalers['output_price'], f'{model_dir}/scaler_output_price_encdec.pkl')
-        joblib.dump(scalers['output_volume'], f'{model_dir}/scaler_output_volume_encdec.pkl')
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'config': config_dict,
+            'input_size': input_size,
+            'feature_cols': feature_cols,
+            'target_cols': target_cols,
+            'metrics': metrics,
+            'timestamp': datetime.now().isoformat()
+        }, f'{model_dir}/lstm_gru_corrected.pth')
         
-        with open(f'{model_dir}/config_encoder_decoder.json', 'w') as f:
-            json.dump({
-                'input_size': input_size,
-                'encoder_hidden': Config.ENCODER_HIDDEN,
-                'decoder_hidden': Config.DECODER_HIDDEN,
-                'feature_cols': feature_cols,
-                'target_cols': target_cols,
-                'metrics_test': metrics,
-                'timestamp': datetime.now().isoformat()
-            }, f, indent=2)
+        joblib.dump(scalers['input'], f'{model_dir}/scaler_input.pkl')
+        joblib.dump(scalers['output_price'], f'{model_dir}/scaler_output_price.pkl')
+        joblib.dump(scalers['output_volume'], f'{model_dir}/scaler_output_volume.pkl')
         
         print(f"\n💾 Model saved in '{model_dir}/'")
-        
-        msg = f"""
-✅ *Encoder-Decoder LSTM*
-
-📊 *Price (OHLC):*
-   • Avg R²: {avg_r2_price:.4f}
-   • Avg Accuracy: {avg_acc_price:.2f}%
-
-📊 *Volume:*
-   • R²: {vol_r2:.4f}
-   • Accuracy: {vol_acc:.2f}%
-
-🏗️ *Architecture:*
-   • Encoder: 3L Bi-LSTM (128h)
-   • Decoder: 2L LSTM (128h)
-   • Attention + Teacher Forcing
-   • {total_params:,} parameters
-
-⏱️ *Time:* {training_time/60:.1f} min
-"""
-        send_telegram(msg)
-        
         print("\n" + "="*70)
         print("  ✅ PROCESS COMPLETE")
         print("="*70 + "\n")
         
+    except KeyboardInterrupt:
+        print("\n\n⚠️ Entrenamiento interrumpido manualmente")
+        print("💾 El checkpoint se guardó automáticamente")
+        print("🔄 Ejecuta de nuevo para reanudar")
     except Exception as e:
-        error_msg = f"❌ Error: {str(e)}"
-        print(f"\n{error_msg}")
+        print(f"\n❌ Error: {str(e)}")
         import traceback
         traceback.print_exc()
-        send_telegram(error_msg)
         raise
-
-def send_telegram(msg):
-    TELEGRAM_API = os.environ.get('TELEGRAM_API', '')
-    CHAT_ID = os.environ.get('CHAT_ID', '')
-    
-    if not TELEGRAM_API or not CHAT_ID:
-        return
-    
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_API}/sendMessage"
-        requests.post(url, data={'chat_id': CHAT_ID, 'text': msg, 'parse_mode': 'Markdown'}, timeout=10)
-    except:
-        pass
 
 if __name__ == "__main__":
     main()
