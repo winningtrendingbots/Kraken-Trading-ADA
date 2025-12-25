@@ -31,6 +31,7 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
+'''
 # ================================
 # 🎛️ CONFIGURACIÓN OPTIMIZADA
 # ================================
@@ -64,6 +65,92 @@ class Config:
     TRAIN_SIZE = 0.70
     VAL_SIZE = 0.15
     TEST_SIZE = 0.15
+
+'''
+class Config:
+    # Arquitectura (REDUCIDA para velocidad)
+    SEQ_LEN = 60  # ⬇️ Reducido de 120 a 60
+    ENCODER_HIDDEN = 96  # ⬇️ Reducido de 128 a 96
+    DECODER_HIDDEN = 128  # ⬇️ Reducido de 160 a 128
+    ENCODER_LAYERS = 1  # ⬇️ Reducido de 2 a 1 (gran impacto en velocidad)
+    DECODER_LAYERS = 1  # ⬇️ Reducido de 2 a 1
+    DROPOUT = 0.2
+    BIDIRECTIONAL_ENCODER = True
+    USE_ATTENTION = True
+    
+    # Entrenamiento (OPTIMIZADO)
+    BATCH_SIZE = 128  # ⬆️ Aumentado para procesamiento más rápido
+    EPOCHS = 100  # ⬇️ Reducido de 220 a 100
+    LEARNING_RATE = 0.0003  # ⬆️ Aumentado para convergencia más rápida
+    WEIGHT_DECAY = 1e-5
+    PATIENCE = 15  # ⬇️ Reducido de 25 a 15
+    MIN_DELTA = 1e-5
+    GRAD_CLIP = 1.0
+    TEACHER_FORCING_RATIO = 0.3  # ⬇️ Reducido de 0.4 a 0.3
+    
+    # Checkpointing
+    CHECKPOINT_EVERY = 5  # Guardar cada 5 épocas
+    RESUME_TRAINING = True  # Reanudar si existe checkpoint
+    
+    # Loss weights
+    PRICE_WEIGHT = 1.0
+    VOLUME_WEIGHT = 0.12
+    CONSTRAINT_WEIGHT = 0.5  # ⬇️ Reducido para acelerar convergencia
+    
+    # Datos
+    TRAIN_SIZE = 0.70
+    VAL_SIZE = 0.15
+    TEST_SIZE = 0.15
+
+
+# ================================
+# 📊 ANÁLISIS SIMPLIFICADO (FEATURES ESENCIALES)
+# ================================
+def calculate_essential_features(df):
+    """Calcula solo las features más importantes para velocidad"""
+    df = df.copy()
+    
+    # Volumen log-normalizado
+    df['log_volume'] = np.log1p(df['volume'])
+    df['volume_ma_5'] = df['volume'].rolling(5).mean()
+    df['volume_ma_20'] = df['volume'].rolling(20).mean()
+    df['volume_ratio'] = df['volume'] / (df['volume_ma_20'] + 1e-10)
+    
+    # Medias móviles esenciales
+    for period in [5, 10, 20]:
+        df[f'sma_{period}'] = df['close'].rolling(period).mean()
+        df[f'close_sma_{period}_ratio'] = df['close'] / (df[f'sma_{period}'] + 1e-10)
+    
+    # RSI
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / (loss + 1e-10)
+    df['rsi'] = 100 - (100 / (1 + rs))
+    
+    # MACD
+    df['ema_12'] = df['close'].ewm(span=12, adjust=False).mean()
+    df['ema_26'] = df['close'].ewm(span=26, adjust=False).mean()
+    df['macd'] = df['ema_12'] - df['ema_26']
+    df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+    
+    # Volatilidad
+    df['returns'] = df['close'].pct_change()
+    df['volatility_20'] = df['returns'].rolling(20).std()
+    
+    # Derivadas esenciales
+    df['price_velocity'] = df['close'].pct_change()
+    df['volume_velocity'] = df['volume'].pct_change()
+    df['price_volume_corr_20'] = df['close'].rolling(20).corr(df['volume'])
+    
+    df = df.replace([np.inf, -np.inf], np.nan)
+    df = df.fillna(method='ffill').fillna(method='bfill').fillna(0)
+    
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    for col in numeric_cols:
+        df[col] = np.clip(df[col], -1e6, 1e6)
+    
+    return df
 
 # ================================
 # 📊 ANÁLISIS AVANZADO DE DERIVADAS Y CORRELACIONES
@@ -134,6 +221,53 @@ def calculate_advanced_derivatives(df):
         df[col] = np.clip(df[col], -1e6, 1e6)
     
     return df
+
+# ================================
+# 💾 CHECKPOINTING
+# ================================
+def save_checkpoint(epoch, model, optimizer, scheduler, train_losses, val_losses, 
+                   best_val_loss, patience_counter, filepath='checkpoint.pth'):
+    """Guarda checkpoint completo del entrenamiento"""
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'best_val_loss': best_val_loss,
+        'patience_counter': patience_counter,
+        'config': {
+            'seq_len': Config.SEQ_LEN,
+            'encoder_hidden': Config.ENCODER_HIDDEN,
+            'decoder_hidden': Config.DECODER_HIDDEN,
+            'encoder_layers': Config.ENCODER_LAYERS,
+            'decoder_layers': Config.DECODER_LAYERS,
+        }
+    }
+    torch.save(checkpoint, filepath)
+    print(f"💾 Checkpoint guardado: {filepath}")
+
+
+def load_checkpoint(filepath, model, optimizer, scheduler):
+    """Carga checkpoint para reanudar entrenamiento"""
+    if not os.path.exists(filepath):
+        return None
+    
+    print(f"📂 Cargando checkpoint: {filepath}")
+    checkpoint = torch.load(filepath)
+    
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    
+    return {
+        'start_epoch': checkpoint['epoch'] + 1,
+        'train_losses': checkpoint['train_losses'],
+        'val_losses': checkpoint['val_losses'],
+        'best_val_loss': checkpoint['best_val_loss'],
+        'patience_counter': checkpoint['patience_counter']
+    }
 
 # ================================
 # 📊 EXPORTAR MÉTRICAS A CSV
@@ -351,8 +485,8 @@ class BahdanauAttention(nn.Module):
 # 🧠 ENCODER (LSTM)
 # ================================
 class LSTMEncoder(nn.Module):
-    def __init__(self, input_size, hidden_size=128, num_layers=2, 
-                 dropout=0.25, bidirectional=True):
+    def __init__(self, input_size, hidden_size=96, num_layers=1, 
+                 dropout=0.2, bidirectional=True):
         super().__init__()
         
         self.hidden_size = hidden_size
@@ -394,8 +528,8 @@ class LSTMEncoder(nn.Module):
 # 🧠 DECODER (GRU) ✨
 # ================================
 class GRUDecoder(nn.Module):
-    def __init__(self, encoder_hidden_size=128, decoder_hidden_size=160, 
-                 num_layers=2, dropout=0.25):
+    def __init__(self, encoder_hidden_size=96, decoder_hidden_size=128, 
+                 num_layers=1, dropout=0.2):
         super().__init__()
         
         self.encoder_hidden_size = encoder_hidden_size
@@ -433,8 +567,8 @@ class GRUDecoder(nn.Module):
 # 🧠 ENCODER-DECODER HÍBRIDO
 # ================================
 class HybridEncoderDecoder(nn.Module):
-    def __init__(self, input_size, encoder_hidden=128, decoder_hidden=160,
-                 encoder_layers=2, decoder_layers=2, dropout=0.25, 
+    def __init__(self, input_size, encoder_hidden=96, decoder_hidden=128,
+                 encoder_layers=1, decoder_layers=1, dropout=0.2, 
                  bidirectional_encoder=True):
         super().__init__()
         
@@ -458,7 +592,7 @@ class HybridEncoderDecoder(nn.Module):
         self.decoder_layers = decoder_layers
         self.output_activation = nn.Tanh()
     
-    def forward(self, x, target=None, teacher_forcing_ratio=0.4):
+    def forward(self, x, target=None, teacher_forcing_ratio=0.3):
         batch_size = x.size(0)
         encoder_outputs, (encoder_hidden, encoder_cell) = self.encoder(x)
         decoder_hidden = self.decoder.hidden_projection(encoder_hidden[-self.decoder_layers:])
@@ -479,6 +613,89 @@ class HybridEncoderDecoder(nn.Module):
         outputs = torch.cat(outputs, dim=-1)
         outputs = self.output_activation(outputs) * 0.05
         return outputs
+
+
+# ================================
+# 📦 PREPARACIÓN DE DATOS
+# ================================
+def prepare_dataset(df):
+    print("\n" + "="*70)
+    print("  🔧 PREPARACIÓN DE DATOS OPTIMIZADA")
+    print("="*70)
+    
+    df = calculate_essential_features(df)
+    
+    # Targets
+    df['delta_open'] = (df['open'].shift(-1) - df['close']) / (df['close'] + 1e-10)
+    df['delta_high'] = (df['high'].shift(-1) - df['close']) / (df['close'] + 1e-10)
+    df['delta_low'] = (df['low'].shift(-1) - df['close']) / (df['close'] + 1e-10)
+    df['delta_close'] = (df['close'].shift(-1) - df['close']) / (df['close'] + 1e-10)
+    df['delta_volume'] = np.log1p(df['volume'].shift(-1)) - np.log1p(df['volume'])
+    
+    df = df.dropna()
+    print(f"📊 Datos limpios: {len(df):,} velas")
+    
+    all_numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    exclude_cols = ['delta_open', 'delta_high', 'delta_low', 'delta_close', 'delta_volume']
+    feature_cols = [col for col in all_numeric_cols if col not in exclude_cols]
+    target_cols = ['delta_open', 'delta_high', 'delta_low', 'delta_close', 'delta_volume']
+    
+    print(f"🎯 {len(feature_cols)} features, {len(target_cols)} targets")
+    
+    # Split
+    train_end = int(len(df) * Config.TRAIN_SIZE)
+    val_end = int(len(df) * (Config.TRAIN_SIZE + Config.VAL_SIZE))
+    
+    df_train = df.iloc[:train_end].copy()
+    df_val = df.iloc[train_end:val_end].copy()
+    df_test = df.iloc[val_end:].copy()
+    
+    print(f"📊 Train: {len(df_train)}, Val: {len(df_val)}, Test: {len(df_test)}")
+    
+    # Scalers
+    scaler_in = RobustScaler(quantile_range=(10, 90))
+    scaler_out_price = RobustScaler(quantile_range=(10, 90))
+    scaler_out_volume = RobustScaler(quantile_range=(10, 90))
+    
+    X_train = scaler_in.fit_transform(df_train[feature_cols])
+    X_val = scaler_in.transform(df_val[feature_cols])
+    X_test = scaler_in.transform(df_test[feature_cols])
+    
+    y_train_price = scaler_out_price.fit_transform(df_train[target_cols[:4]])
+    y_train_volume = scaler_out_volume.fit_transform(df_train[[target_cols[4]]])
+    y_train = np.hstack([y_train_price, y_train_volume])
+    
+    y_val_price = scaler_out_price.transform(df_val[target_cols[:4]])
+    y_val_volume = scaler_out_volume.transform(df_val[[target_cols[4]]])
+    y_val = np.hstack([y_val_price, y_val_volume])
+    
+    y_test_price = scaler_out_price.transform(df_test[target_cols[:4]])
+    y_test_volume = scaler_out_volume.transform(df_test[[target_cols[4]]])
+    y_test = np.hstack([y_test_price, y_test_volume])
+    
+    def create_sequences(X, y, seq_len):
+        X_seq, y_seq = [], []
+        for i in range(seq_len, len(X)):
+            X_seq.append(X[i-seq_len:i])
+            y_seq.append(y[i-1])
+        return np.array(X_seq), np.array(y_seq)
+    
+    print(f"🔄 Creando secuencias (seq_len={Config.SEQ_LEN})...")
+    X_train_seq, y_train_seq = create_sequences(X_train, y_train, Config.SEQ_LEN)
+    X_val_seq, y_val_seq = create_sequences(X_val, y_val, Config.SEQ_LEN)
+    X_test_seq, y_test_seq = create_sequences(X_test, y_test, Config.SEQ_LEN)
+    
+    print(f"✅ Train: {X_train_seq.shape}, Val: {X_val_seq.shape}, Test: {X_test_seq.shape}")
+    
+    scalers = {
+        'input': scaler_in,
+        'output_price': scaler_out_price,
+        'output_volume': scaler_out_volume
+    }
+    
+    return (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
+           scalers, feature_cols, target_cols
+
 
 # ================================
 # 📦 PREPARACIÓN DE DATOS CON DERIVADAS
@@ -575,7 +792,7 @@ def prepare_hybrid_dataset(df):
 # 🏋️ LOSS
 # ================================
 class HybridLoss(nn.Module):
-    def __init__(self, price_weight=1.0, volume_weight=0.12, constraint_weight=1.0):
+    def __init__(self, price_weight=1.0, volume_weight=0.12, constraint_weight=0.5):
         super().__init__()
         self.mse = nn.MSELoss(reduction='none')
         self.price_weight = price_weight
@@ -611,6 +828,7 @@ class HybridLoss(nn.Module):
             'mse_volume': mse_volume.item(),
             'constraint': constraint_loss.item()
         }
+
 
 # ================================
 # 🏋️ ENTRENAMIENTO
@@ -718,6 +936,134 @@ def train_hybrid_model(model, train_loader, val_loader, device):
     print(f"\n✅ Training complete: Best val loss = {best_val_loss:.6f}")
     return train_losses, val_losses
 
+def train_model(model, train_loader, val_loader, device):
+    print("\n" + "="*70)
+    print("  🏋️ ENTRENAMIENTO OPTIMIZADO CON CHECKPOINTING")
+    print("="*70)
+    
+    criterion = HybridLoss(
+        price_weight=Config.PRICE_WEIGHT,
+        volume_weight=Config.VOLUME_WEIGHT,
+        constraint_weight=Config.CONSTRAINT_WEIGHT
+    )
+    
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=Config.LEARNING_RATE,
+        weight_decay=Config.WEIGHT_DECAY
+    )
+    
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=8, min_lr=1e-6
+    )
+    
+    # Intentar cargar checkpoint
+    checkpoint_path = 'training_checkpoint.pth'
+    checkpoint_data = None
+    if Config.RESUME_TRAINING:
+        checkpoint_data = load_checkpoint(checkpoint_path, model, optimizer, scheduler)
+    
+    if checkpoint_data:
+        start_epoch = checkpoint_data['start_epoch']
+        train_losses = checkpoint_data['train_losses']
+        val_losses = checkpoint_data['val_losses']
+        best_val_loss = checkpoint_data['best_val_loss']
+        patience_counter = checkpoint_data['patience_counter']
+        print(f"✅ Reanudando desde época {start_epoch}/{Config.EPOCHS}")
+    else:
+        start_epoch = 0
+        train_losses, val_losses = [], []
+        best_val_loss = float('inf')
+        patience_counter = 0
+        print(f"🆕 Iniciando entrenamiento desde cero")
+    
+    best_model_state = None
+    
+    print(f"⚙️ Config: LR={Config.LEARNING_RATE}, Batch={Config.BATCH_SIZE}, Epochs={Config.EPOCHS}")
+    print(f"💾 Checkpoint automático cada {Config.CHECKPOINT_EVERY} épocas")
+    
+    epoch_bar = tqdm(range(start_epoch, Config.EPOCHS), desc="Training", unit="epoch", initial=start_epoch, total=Config.EPOCHS)
+    
+    for epoch in epoch_bar:
+        epoch_start_time = time.time()
+        
+        # TRAIN
+        model.train()
+        train_loss = 0
+        
+        for X_batch, y_batch in train_loader:
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            
+            optimizer.zero_grad()
+            predictions = model(X_batch, target=y_batch, 
+                              teacher_forcing_ratio=Config.TEACHER_FORCING_RATIO)
+            loss, _ = criterion(predictions, y_batch)
+            
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), Config.GRAD_CLIP)
+            optimizer.step()
+            
+            train_loss += loss.item()
+        
+        train_loss /= len(train_loader)
+        train_losses.append(train_loss)
+        
+        # VAL
+        model.eval()
+        val_loss = 0
+        with torch.no_grad():
+            for X_batch, y_batch in val_loader:
+                X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+                predictions = model(X_batch, target=None, teacher_forcing_ratio=0)
+                loss, _ = criterion(predictions, y_batch)
+                val_loss += loss.item()
+        
+        val_loss /= len(val_loader)
+        val_losses.append(val_loss)
+        
+        scheduler.step(val_loss)
+        
+        # Early stopping
+        if val_loss < best_val_loss - Config.MIN_DELTA:
+            best_val_loss = val_loss
+            best_model_state = model.state_dict().copy()
+            patience_counter = 0
+            torch.save(best_model_state, 'best_model_optimized.pth')
+        else:
+            patience_counter += 1
+        
+        # Checkpoint periódico
+        if (epoch + 1) % Config.CHECKPOINT_EVERY == 0:
+            save_checkpoint(epoch, model, optimizer, scheduler, train_losses, val_losses,
+                          best_val_loss, patience_counter, checkpoint_path)
+        
+        epoch_time = time.time() - epoch_start_time
+        current_lr = optimizer.param_groups[0]['lr']
+        
+        epoch_bar.set_postfix({
+            'train': f'{train_loss:.4f}',
+            'val': f'{val_loss:.4f}',
+            'best': f'{best_val_loss:.4f}',
+            'lr': f'{current_lr:.6f}',
+            'patience': f'{patience_counter}/{Config.PATIENCE}',
+            'time': f'{epoch_time:.1f}s'
+        })
+        
+        if patience_counter >= Config.PATIENCE:
+            print(f"\n⏹️ Early stopping at epoch {epoch+1}")
+            break
+    
+    if best_model_state:
+        model.load_state_dict(best_model_state)
+    
+    # Limpiar checkpoint al finalizar con éxito
+    if os.path.exists(checkpoint_path):
+        os.remove(checkpoint_path)
+        print(f"🗑️ Checkpoint temporal eliminado")
+    
+    print(f"\n✅ Training complete: Best val loss = {best_val_loss:.6f}")
+    return train_losses, val_losses
+
 # ================================
 # 📊 EVALUACIÓN
 # ================================
@@ -768,6 +1114,55 @@ def evaluate_hybrid_model(model, test_loader, scalers, target_cols, device):
         
         print(f"📊 {col}:")
         print(f"   MAE: {mae:.6f} | RMSE: {rmse:.6f} | R²: {r2:.4f} | Acc: {accuracy:.2f}%")
+    
+    return predictions_denorm, targets_denorm, metrics
+
+def evaluate_model(model, test_loader, scalers, target_cols, device):
+    print("\n" + "="*70)
+    print("  📊 EVALUACIÓN")
+    print("="*70)
+    
+    model.eval()
+    predictions, targets = [], []
+    
+    with torch.no_grad():
+        for X_batch, y_batch in tqdm(test_loader, desc="Evaluating"):
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            pred = model(X_batch, target=None, teacher_forcing_ratio=0)
+            predictions.extend(pred.cpu().numpy())
+            targets.extend(y_batch.cpu().numpy())
+    
+    predictions = np.array(predictions)
+    targets = np.array(targets)
+    
+    # Desnormalizar
+    pred_price = scalers['output_price'].inverse_transform(predictions[:, :4])
+    pred_volume = scalers['output_volume'].inverse_transform(predictions[:, 4:])
+    predictions_denorm = np.hstack([pred_price, pred_volume])
+    
+    target_price = scalers['output_price'].inverse_transform(targets[:, :4])
+    target_volume = scalers['output_volume'].inverse_transform(targets[:, 4:])
+    targets_denorm = np.hstack([target_price, target_volume])
+    
+    metrics = {}
+    print()
+    for i, col in enumerate(target_cols):
+        mae = mean_absolute_error(targets_denorm[:, i], predictions_denorm[:, i])
+        rmse = np.sqrt(mean_squared_error(targets_denorm[:, i], predictions_denorm[:, i]))
+        r2 = r2_score(targets_denorm[:, i], predictions_denorm[:, i])
+        
+        direction_true = np.sign(targets_denorm[:, i])
+        direction_pred = np.sign(predictions_denorm[:, i])
+        accuracy = np.mean(direction_true == direction_pred) * 100
+        
+        metrics[col] = {
+            'MAE': float(mae),
+            'RMSE': float(rmse),
+            'R2': float(r2),
+            'Direction_Accuracy': float(accuracy)
+        }
+        
+        print(f"📊 {col}: MAE={mae:.6f}, RMSE={rmse:.6f}, R²={r2:.4f}, Acc={accuracy:.2f}%")
     
     return predictions_denorm, targets_denorm, metrics
 
@@ -915,28 +1310,58 @@ def plot_derivatives_analysis(df, save_path='derivatives_analysis.png'):
     plt.close()
     print(f"📈 Derivatives analysis plot saved: {save_path}")
 
+def plot_results(train_losses, val_losses, metrics):
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig.suptitle('LSTM-GRU Optimized Results', fontsize=14, fontweight='bold')
+    
+    # Loss
+    axes[0].plot(train_losses, label='Train', linewidth=2)
+    axes[0].plot(val_losses, label='Val', linewidth=2)
+    axes[0].set_title('Training Loss')
+    axes[0].set_xlabel('Epoch')
+    axes[0].set_ylabel('Loss')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+    axes[0].set_yscale('log')
+    
+    # R²
+    names = list(metrics.keys())
+    r2_scores = [metrics[n]['R2'] for n in names]
+    axes[1].bar(names, r2_scores)
+    axes[1].set_title('R² Scores')
+    axes[1].axhline(y=0, color='r', linestyle='--', alpha=0.5)
+    axes[1].tick_params(axis='x', rotation=45)
+    axes[1].grid(True, alpha=0.3, axis='y')
+    
+    # Accuracy
+    acc_scores = [metrics[n]['Direction_Accuracy'] for n in names]
+    axes[2].bar(names, acc_scores)
+    axes[2].set_title('Direction Accuracy (%)')
+    axes[2].axhline(y=50, color='r', linestyle='--', alpha=0.5)
+    axes[2].tick_params(axis='x', rotation=45)
+    axes[2].grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    plt.savefig('optimized_results.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    print("📈 Plot saved: optimized_results.png")
+
 # ================================
 # 🚀 MAIN
 # ================================
 def main():
     try:
         print("\n" + "="*70)
-        print("  🚀 HYBRID LSTM ENCODER + GRU DECODER + DERIVATIVES")
+        print("  🚀 LSTM-GRU OPTIMIZADO CON CHECKPOINTING")
         print("="*70)
-        
-        print("\n✨ ARCHITECTURE:")
-        print("   • Encoder: 2-layer Bi-LSTM (128 hidden)")
-        print("   • Decoder: 2-layer GRU (160 hidden)")
-        print("   • Bahdanau Attention mechanism")
-        print("   • Teacher forcing: 40% during training")
-        print("   • Autoregressive generation")
-        print("   • Structured output: ΔO→ΔH→ΔL→ΔC→ΔV")
-        print("\n💡 ENHANCED FEATURES:")
-        print("   • Price 1st & 2nd derivatives (velocity & acceleration)")
-        print("   • Volume 1st & 2nd derivatives (velocity & acceleration)")
-        print("   • Rolling correlations (price-volume)")
-        print("   • Joint momentum analysis")
-        print("   • Export to CSV for external analysis")
+        print("\n⚡ OPTIMIZACIONES:")
+        print("   • Arquitectura reducida: 1 layer LSTM + 1 layer GRU")
+        print("   • Secuencias más cortas: 60 timesteps")
+        print("   • Batch size aumentado: 128")
+        print("   • Menos épocas: 100")
+        print("   • Features esenciales solamente")
+        print("   • Checkpointing automático cada 5 épocas")
+        print("   • Recuperación de entrenamiento interrumpido")
         
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"\n🖥️ Device: {device}")
@@ -963,15 +1388,9 @@ def main():
         
         print(f"✅ Downloaded: {len(df):,} candles")
         
-        # Prepare data (incluye cálculo y exportación de derivadas)
+        # Prepare data
         (X_train, y_train), (X_val, y_val), (X_test, y_test), \
-        scalers, feature_cols, target_cols = prepare_hybrid_dataset(df)
-        
-        # Crear visualización de derivadas
-        print("\n📊 Creating derivatives visualization...")
-        df_with_derivatives = calculate_enhanced_indicators(df)
-        df_with_derivatives = calculate_advanced_derivatives(df_with_derivatives)
-        plot_derivatives_analysis(df_with_derivatives, 'ADAUSD_derivatives_analysis.png')
+        scalers, feature_cols, target_cols = prepare_dataset(df)
         
         input_size = len(feature_cols)
         
@@ -987,13 +1406,13 @@ def main():
         )
         
         train_loader = torch.utils.data.DataLoader(
-            train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True
+            train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True, num_workers=2
         )
         val_loader = torch.utils.data.DataLoader(
-            val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False
+            val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=2
         )
         test_loader = torch.utils.data.DataLoader(
-            test_dataset, batch_size=Config.BATCH_SIZE, shuffle=False
+            test_dataset, batch_size=Config.BATCH_SIZE, shuffle=False, num_workers=2
         )
         
         # Create model
@@ -1012,13 +1431,13 @@ def main():
         
         # Train
         start_time = time.time()
-        train_losses, val_losses = train_hybrid_model(model, train_loader, val_loader, device)
+        train_losses, val_losses = train_model(model, train_loader, val_loader, device)
         training_time = time.time() - start_time
         
         print(f"\n⏱️ Training time: {training_time/60:.1f} min")
         
         # Evaluate
-        predictions, targets, metrics = evaluate_hybrid_model(
+        predictions, targets, metrics = evaluate_model(
             model, test_loader, scalers, target_cols, device
         )
         
@@ -1028,8 +1447,6 @@ def main():
         print("="*70)
         
         price_metrics = {k: v for k, v in metrics.items() if 'volume' not in k}
-        volume_metrics = {k: v for k, v in metrics.items() if 'volume' in k}
-        
         avg_r2_price = np.mean([m['R2'] for m in price_metrics.values()])
         avg_acc_price = np.mean([m['Direction_Accuracy'] for m in price_metrics.values()])
         
@@ -1037,96 +1454,37 @@ def main():
         print(f"   Avg R²: {avg_r2_price:.4f}")
         print(f"   Avg Accuracy: {avg_acc_price:.2f}%")
         
-        if volume_metrics:
-            vol_r2 = volume_metrics['delta_volume']['R2']
-            vol_acc = volume_metrics['delta_volume']['Direction_Accuracy']
-            print(f"\n📊 Volume:")
-            print(f"   R²: {vol_r2:.4f}")
-            print(f"   Accuracy: {vol_acc:.2f}%")
-        
-        plot_hybrid_results(train_losses, val_losses, metrics, predictions, targets)
+        plot_results(train_losses, val_losses, metrics)
         
         # Save
-        model_dir = 'ADAUSD_MODELS'
+        model_dir = 'OPTIMIZED_MODELS'
         os.makedirs(model_dir, exist_ok=True)
         
-        model_config = {
+        torch.save({
             'model_state_dict': model.state_dict(),
-            'input_size': input_size,
-            'encoder_hidden': Config.ENCODER_HIDDEN,
-            'decoder_hidden': Config.DECODER_HIDDEN,
-            'encoder_layers': Config.ENCODER_LAYERS,
-            'decoder_layers': Config.DECODER_LAYERS,
-            'seq_len': Config.SEQ_LEN,
+            'config': vars(Config),
+            'metrics': metrics,
             'feature_cols': feature_cols,
-            'target_cols': target_cols,
-            'metrics_test': metrics,
-            'timestamp': datetime.now().isoformat(),
-            'training_time_minutes': training_time / 60,
-            'total_epochs': len(train_losses),
-            'best_val_loss': min(val_losses),
-            'uses_derivatives': True,
-            'derivative_features': [
-                'price_first_deriv', 'price_second_deriv',
-                'volume_first_deriv', 'volume_second_deriv',
-                'price_volume_correlations', 'joint_momentum'
-            ]
-        }
+            'target_cols': target_cols
+        }, f'{model_dir}/optimized_lstm_gru.pth')
         
-        torch.save(model_config, f'{model_dir}/hybrid_lstm_gru_with_derivatives.pth')
-        joblib.dump(scalers['input'], f'{model_dir}/scaler_input_hybrid_deriv.pkl')
-        joblib.dump(scalers['output_price'], f'{model_dir}/scaler_output_price_hybrid_deriv.pkl')
-        joblib.dump(scalers['output_volume'], f'{model_dir}/scaler_output_volume_hybrid_deriv.pkl')
-        
-        with open(f'{model_dir}/config_hybrid_lstm_gru_derivatives.json', 'w') as f:
-            json.dump({
-                'input_size': input_size,
-                'encoder_hidden': Config.ENCODER_HIDDEN,
-                'decoder_hidden': Config.DECODER_HIDDEN,
-                'feature_cols': feature_cols,
-                'target_cols': target_cols,
-                'metrics_test': metrics,
-                'timestamp': datetime.now().isoformat(),
-                'uses_derivatives': True
-            }, f, indent=2)
+        joblib.dump(scalers['input'], f'{model_dir}/scaler_input.pkl')
+        joblib.dump(scalers['output_price'], f'{model_dir}/scaler_output_price.pkl')
+        joblib.dump(scalers['output_volume'], f'{model_dir}/scaler_output_volume.pkl')
         
         print(f"\n💾 Model saved in '{model_dir}/'")
-        print(f"📄 Derivatives CSV: ADAUSD_derivatives_correlations.csv")
-        print(f"📄 Statistics JSON: derivatives_statistics.json")
-        print(f"📈 Derivatives plot: ADAUSD_derivatives_analysis.png")
-        
-        msg = f"""
-✅ *Hybrid LSTM-GRU + Derivatives*
-
-📊 *Price (OHLC):*
-   • Avg R²: {avg_r2_price:.4f}
-   • Avg Accuracy: {avg_acc_price:.2f}%
-
-📊 *Volume:*
-   • R²: {vol_r2:.4f}
-   • Accuracy: {vol_acc:.2f}%
-
-🗃️ *Architecture:*
-   • Encoder: 2L Bi-LSTM (128h)
-   • Decoder: 2L GRU (160h)
-   • Bahdanau Attention
-   • {total_params:,} parameters
-   • Enhanced with derivatives & correlations
-
-⏱️ *Time:* {training_time/60:.1f} min
-"""
-        send_telegram(msg)
-        
         print("\n" + "="*70)
         print("  ✅ PROCESS COMPLETE")
         print("="*70 + "\n")
         
+    except KeyboardInterrupt:
+        print("\n\n⚠️ Entrenamiento interrumpido manualmente")
+        print("💾 El checkpoint se guardó automáticamente")
+        print("🔄 Ejecuta de nuevo para reanudar desde el último checkpoint")
     except Exception as e:
-        error_msg = f"❌ Error: {str(e)}"
-        print(f"\n{error_msg}")
+        print(f"\n❌ Error: {str(e)}")
         import traceback
         traceback.print_exc()
-        send_telegram(error_msg)
         raise
 
 def send_telegram(msg):
