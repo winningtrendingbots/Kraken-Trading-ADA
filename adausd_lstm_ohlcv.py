@@ -1,9 +1,10 @@
 """
-LSTM HÍBRIDO OPTIMIZADO - PREDICCIÓN OHLCV COMPLETO
-✅ Predice: Open, High, Low, Close, Volume
-✅ Sin parámetro 'verbose' que causa error
-✅ Configuración optimizada para mejores R²
-✅ Monitoreo detallado del entrenamiento
+LSTM HÍBRIDO MEJORADO - PREDICCIÓN OHLCV
+✅ Volumen con normalización logarítmica separada
+✅ Arquitectura más robusta (más capacidad)
+✅ Loss balanceado entre precio y volumen
+✅ Feature engineering mejorado
+✅ Hiperparámetros optimizados
 """
 
 import pandas as pd
@@ -27,32 +28,36 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ================================
-# 🎛️ CONFIGURACIÓN OPTIMIZADA
+# 🎛️ CONFIGURACIÓN MEJORADA
 # ================================
 class Config:
     # Características
     USE_VOLUME = True
+    USE_VOLUME_LOG = True  # ✅ Nuevo: log-transform para volumen
     USE_VOLUME_DERIVATIVES = True
     USE_VOLUME_INDICATORS = True
     USE_PRICE_DERIVATIVES = True
     PREDICT_DELTAS = True
-    SCALER_TYPE = 'robust'
     
-    # Arquitectura optimizada para 5 outputs
-    SEQ_LEN = 60
-    HIDDEN_SIZE = 80  # Aumentado para manejar más outputs
-    NUM_LAYERS = 2
-    DROPOUT = 0.4
+    # Arquitectura más robusta
+    SEQ_LEN = 90  # ✅ Más contexto
+    HIDDEN_SIZE = 128  # ✅ Más capacidad
+    NUM_LAYERS = 3  # ✅ Más profundidad
+    DROPOUT = 0.3  # ✅ Menos dropout (modelo más grande puede manejar)
     BIDIRECTIONAL = True
     
-    # Entrenamiento
-    BATCH_SIZE = 128
-    EPOCHS = 150
-    LEARNING_RATE = 0.0005
-    WEIGHT_DECAY = 1e-4
-    PATIENCE = 20
-    MIN_DELTA = 1e-5
-    GRAD_CLIP = 0.5
+    # Entrenamiento ajustado
+    BATCH_SIZE = 64  # ✅ Menor batch para mejor convergencia
+    EPOCHS = 200
+    LEARNING_RATE = 0.0001  # ✅ LR más bajo para estabilidad
+    WEIGHT_DECAY = 5e-5
+    PATIENCE = 25
+    MIN_DELTA = 1e-6
+    GRAD_CLIP = 1.0
+    
+    # Loss weights
+    PRICE_WEIGHT = 1.0
+    VOLUME_WEIGHT = 0.1  # ✅ Reducir peso del volumen
     
     # Datos
     TRAIN_SIZE = 0.70
@@ -60,19 +65,26 @@ class Config:
     TEST_SIZE = 0.15
 
 # ================================
-# 📊 INDICADORES
+# 📊 INDICADORES MEJORADOS
 # ================================
-def calculate_hybrid_indicators(df):
-    """Calcula indicadores híbridos"""
+def calculate_enhanced_indicators(df):
+    """Calcula indicadores técnicos avanzados"""
     df = df.copy()
     
-    # Derivadas de volumen
-    df['volume_1st_deriv'] = df['volume'].diff()
-    df['volume_2nd_deriv'] = df['volume_1st_deriv'].diff()
-    df['volume_1st_deriv_smooth'] = df['volume_1st_deriv'].rolling(window=5, center=True).mean()
-    df['volume_2nd_deriv_smooth'] = df['volume_2nd_deriv'].rolling(window=5, center=True).mean()
+    # === INDICADORES DE VOLUMEN ===
     
-    # OBV
+    # Log volumen (normaliza mejor)
+    df['log_volume'] = np.log1p(df['volume'])
+    df['volume_ma_5'] = df['volume'].rolling(5).mean()
+    df['volume_ma_20'] = df['volume'].rolling(20).mean()
+    df['volume_ratio'] = df['volume'] / (df['volume_ma_20'] + 1e-10)
+    
+    # Derivadas de volumen
+    df['volume_1st_deriv'] = df['log_volume'].diff()
+    df['volume_2nd_deriv'] = df['volume_1st_deriv'].diff()
+    df['volume_acceleration'] = df['volume_1st_deriv'].diff()
+    
+    # OBV mejorado
     obv = [0]
     for i in range(1, len(df)):
         if df['close'].iloc[i] > df['close'].iloc[i-1]:
@@ -82,59 +94,79 @@ def calculate_hybrid_indicators(df):
         else:
             obv.append(obv[-1])
     df['obv'] = obv
-    df['obv_norm'] = (df['obv'] - df['obv'].rolling(window=50).mean()) / df['obv'].rolling(window=50).std()
-    df['obv_roc'] = df['obv'].pct_change(periods=14)
+    df['obv_ma'] = pd.Series(obv).rolling(20).mean()
+    df['obv_signal'] = (df['obv'] > df['obv_ma']).astype(int)
+    
+    # === INDICADORES DE PRECIO ===
+    
+    # Medias móviles
+    for period in [5, 10, 20, 50]:
+        df[f'sma_{period}'] = df['close'].rolling(period).mean()
+        df[f'close_sma_{period}_ratio'] = df['close'] / (df[f'sma_{period}'] + 1e-10)
+    
+    # EMAs
+    for period in [9, 21]:
+        df[f'ema_{period}'] = df['close'].ewm(span=period, adjust=False).mean()
     
     # VWAP
     df['typical_price'] = (df['high'] + df['low'] + df['close']) / 3
-    df['vwap'] = (df['typical_price'] * df['volume']).cumsum() / df['volume'].cumsum()
-    df['vwap_deviation'] = (df['close'] - df['vwap']) / df['vwap'] * 100
+    df['vwap'] = (df['typical_price'] * df['volume']).rolling(20).sum() / df['volume'].rolling(20).sum()
+    df['vwap_distance'] = (df['close'] - df['vwap']) / (df['vwap'] + 1e-10)
     
-    # PVT
-    df['pvt'] = ((df['close'] - df['close'].shift(1)) / df['close'].shift(1) * df['volume']).cumsum()
-    df['pvt_ma'] = df['pvt'].rolling(window=20).mean()
-    df['pvt_signal'] = (df['pvt'] > df['pvt_ma']).astype(int)
-    
-    # Ratios
-    df['volume_price_ratio'] = df['volume'] / df['close'].rolling(window=20).mean()
-    df['volume_volatility_ratio'] = df['volume'] / df['volume'].rolling(window=20).std()
-    
-    # Pendientes
-    def calculate_slope(series, window=14):
-        slopes = []
-        for i in range(len(series)):
-            if i < window:
-                slopes.append(0)
-            else:
-                x = np.arange(window)
-                y = series.iloc[i-window:i].values
-                slope = np.polyfit(x, y, 1)[0]
-                slopes.append(slope)
-        return pd.Series(slopes, index=series.index)
-    
-    df['price_slope_14'] = calculate_slope(df['close'], 14)
-    df['obv_slope_14'] = calculate_slope(df['obv'], 14)
-    df['bullish_divergence'] = ((df['price_slope_14'] < 0) & (df['obv_slope_14'] > 0)).astype(int)
-    df['bearish_divergence'] = ((df['price_slope_14'] > 0) & (df['obv_slope_14'] < 0)).astype(int)
+    # Bandas de Bollinger
+    df['bb_middle'] = df['close'].rolling(20).mean()
+    df['bb_std'] = df['close'].rolling(20).std()
+    df['bb_upper'] = df['bb_middle'] + 2 * df['bb_std']
+    df['bb_lower'] = df['bb_middle'] - 2 * df['bb_std']
+    df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'] + 1e-10)
     
     # RSI
     df['rsi'] = calculate_rsi(df['close'], 14)
-    df['volume_rsi'] = calculate_rsi(df['volume'], 14)
+    df['rsi_ma'] = df['rsi'].rolling(5).mean()
     
-    # Aceleración
-    df['volume_acceleration'] = df['volume_1st_deriv'].diff()
+    # MACD
+    df['ema_12'] = df['close'].ewm(span=12, adjust=False).mean()
+    df['ema_26'] = df['close'].ewm(span=26, adjust=False).mean()
+    df['macd'] = df['ema_12'] - df['ema_26']
+    df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+    df['macd_histogram'] = df['macd'] - df['macd_signal']
     
-    # Derivadas de precio
-    df['price_1st_deriv'] = df['close'].diff()
-    df['price_2nd_deriv'] = df['price_1st_deriv'].diff()
-    df['price_volume_correlation'] = df['price_1st_deriv'].rolling(window=20).corr(df['volume_1st_deriv'])
+    # ATR (Average True Range)
+    df['tr1'] = df['high'] - df['low']
+    df['tr2'] = abs(df['high'] - df['close'].shift())
+    df['tr3'] = abs(df['low'] - df['close'].shift())
+    df['true_range'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
+    df['atr'] = df['true_range'].rolling(14).mean()
+    df['atr_percent'] = df['atr'] / (df['close'] + 1e-10)
     
     # Volatilidad
     df['returns'] = df['close'].pct_change()
-    df['volatility'] = df['returns'].rolling(window=20).std()
-    df['volume_adjusted_volatility'] = df['volatility'] * (df['volume'] / df['volume'].rolling(window=20).mean())
+    df['volatility_5'] = df['returns'].rolling(5).std()
+    df['volatility_20'] = df['returns'].rolling(20).std()
     
+    # Rangos intraday
+    df['high_low_range'] = (df['high'] - df['low']) / (df['close'] + 1e-10)
+    df['open_close_range'] = abs(df['open'] - df['close']) / (df['close'] + 1e-10)
+    
+    # Momentum
+    df['roc_5'] = df['close'].pct_change(periods=5)
+    df['roc_10'] = df['close'].pct_change(periods=10)
+    df['roc_20'] = df['close'].pct_change(periods=20)
+    
+    # === INDICADORES DE TIEMPO ===
+    
+    # Extracción temporal (si disponible)
+    if 'time' in df.columns and pd.api.types.is_datetime64_any_dtype(df['time']):
+        df['hour'] = df['time'].dt.hour
+        df['day_of_week'] = df['time'].dt.dayofweek
+        df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+        df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+        df['dow_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
+        df['dow_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
+    
+    # Limpiar
     df = clean_financial_data(df)
+    
     return df
 
 def calculate_rsi(series, period=14):
@@ -148,13 +180,7 @@ def calculate_rsi(series, period=14):
 def clean_financial_data(df, max_abs_value=1e6, fill_method='ffill'):
     df_clean = df.copy()
     df_clean = df_clean.replace([np.inf, -np.inf], np.nan)
-    
-    if fill_method == 'ffill':
-        df_clean = df_clean.fillna(method='ffill')
-    elif fill_method == 'bfill':
-        df_clean = df_clean.fillna(method='bfill')
-    
-    df_clean = df_clean.fillna(0)
+    df_clean = df_clean.fillna(method='ffill').fillna(method='bfill').fillna(0)
     
     numeric_cols = df_clean.select_dtypes(include=[np.number]).columns
     for col in numeric_cols:
@@ -163,16 +189,17 @@ def clean_financial_data(df, max_abs_value=1e6, fill_method='ffill'):
     return df_clean
 
 # ================================
-# 🧠 MODELO
+# 🧠 MODELO MEJORADO
 # ================================
-class HybridLSTM(nn.Module):
-    def __init__(self, input_size, hidden_size=80, num_layers=2, 
-                 output_size=5, dropout=0.4, bidirectional=True):
+class EnhancedLSTM(nn.Module):
+    def __init__(self, input_size, hidden_size=128, num_layers=3, 
+                 output_size=5, dropout=0.3, bidirectional=True):
         super().__init__()
         
         self.bidirectional = bidirectional
         self.num_directions = 2 if bidirectional else 1
         
+        # LSTM con más capacidad
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
@@ -182,19 +209,38 @@ class HybridLSTM(nn.Module):
             bidirectional=bidirectional
         )
         
+        # Attention mejorado
         self.attention = nn.Sequential(
             nn.Linear(hidden_size * self.num_directions, hidden_size),
+            nn.LayerNorm(hidden_size),
             nn.Tanh(),
+            nn.Dropout(dropout * 0.5),
             nn.Linear(hidden_size, 1)
         )
         
+        # Cabezas separadas para precio y volumen
         fc_input = hidden_size * self.num_directions
-        self.fc = nn.Sequential(
+        
+        # Cabeza de precio (OHLC)
+        self.price_head = nn.Sequential(
             nn.Linear(fc_input, fc_input // 2),
             nn.LayerNorm(fc_input // 2),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(fc_input // 2, output_size)
+            nn.Linear(fc_input // 2, fc_input // 4),
+            nn.LayerNorm(fc_input // 4),
+            nn.ReLU(),
+            nn.Dropout(dropout * 0.5),
+            nn.Linear(fc_input // 4, 4)  # Open, High, Low, Close
+        )
+        
+        # Cabeza de volumen
+        self.volume_head = nn.Sequential(
+            nn.Linear(fc_input, fc_input // 4),
+            nn.LayerNorm(fc_input // 4),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(fc_input // 4, 1)  # Volume
         )
         
         self.output_activation = nn.Tanh()
@@ -203,26 +249,35 @@ class HybridLSTM(nn.Module):
         lstm_out, _ = self.lstm(x)
         attn_weights = torch.softmax(self.attention(lstm_out), dim=1)
         context = torch.sum(attn_weights * lstm_out, dim=1)
-        output = self.fc(context)
+        
+        # Predicciones separadas
+        price_pred = self.price_head(context)
+        volume_pred = self.volume_head(context)
+        
+        # Combinar
+        output = torch.cat([price_pred, volume_pred], dim=1)
         output = self.output_activation(output) * 0.05
+        
         return output
 
 # ================================
-# 📦 PREPARACIÓN
+# 📦 PREPARACIÓN MEJORADA
 # ================================
-def prepare_hybrid_dataset(df):
+def prepare_enhanced_dataset(df):
     print("\n" + "="*70)
-    print("  🔧 PREPARACIÓN DE DATOS HÍBRIDOS - OHLCV COMPLETO")
+    print("  🔧 PREPARACIÓN DE DATOS MEJORADOS - OHLCV")
     print("="*70)
     
-    df = calculate_hybrid_indicators(df)
+    df = calculate_enhanced_indicators(df)
     
-    # ✅ PREDICCIÓN OHLCV COMPLETO
-    df['delta_open'] = (df['open'].shift(-1) - df['close']) / df['close']
-    df['delta_high'] = (df['high'].shift(-1) - df['close']) / df['close']
-    df['delta_low'] = (df['low'].shift(-1) - df['close']) / df['close']
-    df['delta_close'] = (df['close'].shift(-1) - df['close']) / df['close']
-    df['delta_volume'] = (df['volume'].shift(-1) - df['volume']) / (df['volume'] + 1e-10)
+    # Targets con normalización especial para volumen
+    df['delta_open'] = (df['open'].shift(-1) - df['close']) / (df['close'] + 1e-10)
+    df['delta_high'] = (df['high'].shift(-1) - df['close']) / (df['close'] + 1e-10)
+    df['delta_low'] = (df['low'].shift(-1) - df['close']) / (df['close'] + 1e-10)
+    df['delta_close'] = (df['close'].shift(-1) - df['close']) / (df['close'] + 1e-10)
+    
+    # ✅ Volumen con log-transform
+    df['delta_volume'] = np.log1p(df['volume'].shift(-1)) - np.log1p(df['volume'])
     
     initial_len = len(df)
     df = df.dropna()
@@ -234,7 +289,7 @@ def prepare_hybrid_dataset(df):
     target_cols = ['delta_open', 'delta_high', 'delta_low', 'delta_close', 'delta_volume']
     
     print(f"\n🎯 {len(feature_cols)} Características")
-    print(f"🎯 {len(target_cols)} Targets (OHLCV)")
+    print(f"🎯 {len(target_cols)} Targets (OHLCV con volumen log-normalizado)")
     
     train_end = int(len(df) * Config.TRAIN_SIZE)
     val_end = int(len(df) * (Config.TRAIN_SIZE + Config.VAL_SIZE))
@@ -248,16 +303,28 @@ def prepare_hybrid_dataset(df):
     print(f"   Val:   {len(df_val):,} ({Config.VAL_SIZE*100:.0f}%)")
     print(f"   Test:  {len(df_test):,} ({Config.TEST_SIZE*100:.0f}%)")
     
-    scaler_in = RobustScaler(quantile_range=(25, 75))
-    scaler_out = RobustScaler(quantile_range=(25, 75))
+    # Scalers separados para mejor normalización
+    scaler_in = RobustScaler(quantile_range=(10, 90))  # ✅ Más robusto a outliers
+    scaler_out_price = RobustScaler(quantile_range=(10, 90))
+    scaler_out_volume = RobustScaler(quantile_range=(10, 90))
     
+    # Features
     X_train = scaler_in.fit_transform(df_train[feature_cols])
     X_val = scaler_in.transform(df_val[feature_cols])
     X_test = scaler_in.transform(df_test[feature_cols])
     
-    y_train = scaler_out.fit_transform(df_train[target_cols])
-    y_val = scaler_out.transform(df_val[target_cols])
-    y_test = scaler_out.transform(df_test[target_cols])
+    # Targets: precio y volumen separados
+    y_train_price = scaler_out_price.fit_transform(df_train[target_cols[:4]])  # OHLC
+    y_train_volume = scaler_out_volume.fit_transform(df_train[[target_cols[4]]])  # Volume
+    y_train = np.hstack([y_train_price, y_train_volume])
+    
+    y_val_price = scaler_out_price.transform(df_val[target_cols[:4]])
+    y_val_volume = scaler_out_volume.transform(df_val[[target_cols[4]]])
+    y_val = np.hstack([y_val_price, y_val_volume])
+    
+    y_test_price = scaler_out_price.transform(df_test[target_cols[:4]])
+    y_test_volume = scaler_out_volume.transform(df_test[[target_cols[4]]])
+    y_test = np.hstack([y_test_price, y_test_volume])
     
     def create_sequences(X, y, seq_len):
         X_seq, y_seq = [], []
@@ -275,74 +342,95 @@ def prepare_hybrid_dataset(df):
     print(f"✅ Val:   X{X_val_seq.shape}, y{y_val_seq.shape}")
     print(f"✅ Test:  X{X_test_seq.shape}, y{y_test_seq.shape}")
     
+    scalers = {
+        'input': scaler_in,
+        'output_price': scaler_out_price,
+        'output_volume': scaler_out_volume
+    }
+    
     return (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
-           scaler_in, scaler_out, feature_cols, target_cols
+           scalers, feature_cols, target_cols
 
 # ================================
-# 🏋️ ENTRENAMIENTO
+# 🏋️ LOSS MEJORADO
 # ================================
-class ImprovedLoss(nn.Module):
-    def __init__(self, mse_weight=1.0, constraint_weight=1.5, realism_weight=0.8):
+class BalancedLoss(nn.Module):
+    def __init__(self, price_weight=1.0, volume_weight=0.1, 
+                 constraint_weight=1.0, realism_weight=0.5):
         super().__init__()
-        self.mse = nn.MSELoss()
-        self.mse_weight = mse_weight
+        self.mse = nn.MSELoss(reduction='none')
+        self.price_weight = price_weight
+        self.volume_weight = volume_weight
         self.constraint_weight = constraint_weight
         self.realism_weight = realism_weight
     
     def forward(self, predictions, targets):
-        mse_loss = self.mse(predictions, targets)
+        # Separar precio y volumen
+        pred_price = predictions[:, :4]
+        pred_volume = predictions[:, 4:]
+        target_price = targets[:, :4]
+        target_volume = targets[:, 4:]
         
+        # MSE separado
+        mse_price = self.mse(pred_price, target_price).mean()
+        mse_volume = self.mse(pred_volume, target_volume).mean()
+        
+        # Restricciones OHLC
         delta_open = predictions[:, 0]
         delta_high = predictions[:, 1]
         delta_low = predictions[:, 2]
         delta_close = predictions[:, 3]
-        delta_volume = predictions[:, 4]
         
-        # Restricciones OHLC
         high_low_violation = torch.clamp(delta_low - delta_high, min=0)
-        constraint_loss_1 = high_low_violation.mean()
-        
         close_below_low = torch.clamp(delta_low - delta_close, min=0)
         close_above_high = torch.clamp(delta_close - delta_high, min=0)
-        constraint_loss_2 = (close_below_low + close_above_high).mean()
+        constraint_loss = (high_low_violation + close_below_low + close_above_high).mean()
         
-        # Restricciones realistas
-        max_delta = 0.05
-        extreme_open = torch.clamp(torch.abs(delta_open) - max_delta, min=0)
-        extreme_high = torch.clamp(torch.abs(delta_high) - max_delta, min=0)
-        extreme_low = torch.clamp(torch.abs(delta_low) - max_delta, min=0)
-        extreme_close = torch.clamp(torch.abs(delta_close) - max_delta, min=0)
-        extreme_volume = torch.clamp(torch.abs(delta_volume) - 1.0, min=0)  # Volumen puede variar más
-        realism_loss = (extreme_open + extreme_high + extreme_low + extreme_close + extreme_volume).mean()
+        # Restricciones de realismo
+        max_delta_price = 0.05
+        extreme_price = torch.clamp(torch.abs(pred_price) - max_delta_price, min=0).mean()
+        extreme_volume = torch.clamp(torch.abs(pred_volume) - 0.5, min=0).mean()
+        realism_loss = extreme_price + extreme_volume
         
+        # Loss total balanceado
         total_loss = (
-            self.mse_weight * mse_loss +
-            self.constraint_weight * (constraint_loss_1 + constraint_loss_2) +
+            self.price_weight * mse_price +
+            self.volume_weight * mse_volume +
+            self.constraint_weight * constraint_loss +
             self.realism_weight * realism_loss
         )
         
         return total_loss, {
-            'mse': mse_loss.item(),
-            'constraint': (constraint_loss_1 + constraint_loss_2).item(),
+            'mse_price': mse_price.item(),
+            'mse_volume': mse_volume.item(),
+            'constraint': constraint_loss.item(),
             'realism': realism_loss.item()
         }
 
-def train_hybrid_model(model, train_loader, val_loader, device):
+# ================================
+# 🏋️ ENTRENAMIENTO
+# ================================
+def train_enhanced_model(model, train_loader, val_loader, device):
     print("\n" + "="*70)
-    print("  🏋️ ENTRENAMIENTO CON SEGUIMIENTO DETALLADO")
+    print("  🏋️ ENTRENAMIENTO MEJORADO")
     print("="*70)
     
-    criterion = ImprovedLoss(mse_weight=1.0, constraint_weight=1.5, realism_weight=0.8)
+    criterion = BalancedLoss(
+        price_weight=Config.PRICE_WEIGHT,
+        volume_weight=Config.VOLUME_WEIGHT,
+        constraint_weight=1.0,
+        realism_weight=0.5
+    )
     
     optimizer = optim.AdamW(
         model.parameters(),
         lr=Config.LEARNING_RATE,
-        weight_decay=Config.WEIGHT_DECAY
+        weight_decay=Config.WEIGHT_DECAY,
+        betas=(0.9, 0.999)
     )
     
-    # ✅ SIN PARÁMETRO VERBOSE
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=8
+        optimizer, mode='min', factor=0.5, patience=10, min_lr=1e-6
     )
     
     train_losses, val_losses = [], []
@@ -353,8 +441,9 @@ def train_hybrid_model(model, train_loader, val_loader, device):
     print(f"\n⚙️  Configuración:")
     print(f"   Learning Rate: {Config.LEARNING_RATE}")
     print(f"   Batch Size: {Config.BATCH_SIZE}")
+    print(f"   Price Weight: {Config.PRICE_WEIGHT}")
+    print(f"   Volume Weight: {Config.VOLUME_WEIGHT}")
     print(f"   Grad Clip: {Config.GRAD_CLIP}")
-    print(f"   Patience: {Config.PATIENCE}")
     print()
     
     epoch_bar = tqdm(range(Config.EPOCHS), desc="Entrenando", unit="epoch")
@@ -363,7 +452,7 @@ def train_hybrid_model(model, train_loader, val_loader, device):
         # ENTRENAMIENTO
         model.train()
         train_loss = 0
-        train_components = {'mse': 0, 'constraint': 0, 'realism': 0}
+        train_components = {'mse_price': 0, 'mse_volume': 0, 'constraint': 0, 'realism': 0}
         
         for X_batch, y_batch in train_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
@@ -406,7 +495,7 @@ def train_hybrid_model(model, train_loader, val_loader, device):
             best_val_loss = val_loss
             best_model_state = model.state_dict().copy()
             patience_counter = 0
-            torch.save(best_model_state, 'best_hybrid_model_ohlcv.pth')
+            torch.save(best_model_state, 'best_enhanced_model_ohlcv.pth')
         else:
             patience_counter += 1
         
@@ -420,17 +509,14 @@ def train_hybrid_model(model, train_loader, val_loader, device):
             'patience': f'{patience_counter}/{Config.PATIENCE}'
         })
         
-        # Log detallado cada 5 épocas
-        if (epoch + 1) % 5 == 0:
+        # Log detallado
+        if (epoch + 1) % 10 == 0:
             print(f"\n📊 Época {epoch+1}/{Config.EPOCHS}")
-            print(f"   Train Loss: {train_loss:.6f} (MSE: {train_components['mse']:.6f}, "
-                  f"Const: {train_components['constraint']:.6f}, Real: {train_components['realism']:.6f})")
-            print(f"   Val Loss:   {val_loss:.6f}")
-            print(f"   Best Val:   {best_val_loss:.6f}")
-            print(f"   LR: {current_lr:.6f}")
-            print(f"   Patience: {patience_counter}/{Config.PATIENCE}")
+            print(f"   Train: {train_loss:.6f} (Price: {train_components['mse_price']:.6f}, "
+                  f"Vol: {train_components['mse_volume']:.6f})")
+            print(f"   Val: {val_loss:.6f} | Best: {best_val_loss:.6f}")
+            print(f"   LR: {current_lr:.6f} | Patience: {patience_counter}/{Config.PATIENCE}")
         
-        # Early stopping
         if patience_counter >= Config.PATIENCE:
             print(f"\n⏹️  Early stopping en época {epoch+1}")
             break
@@ -447,9 +533,9 @@ def train_hybrid_model(model, train_loader, val_loader, device):
 # ================================
 # 📊 EVALUACIÓN
 # ================================
-def evaluate_hybrid_model(model, test_loader, scaler_out, target_cols, device):
+def evaluate_enhanced_model(model, test_loader, scalers, target_cols, device):
     print("\n" + "="*70)
-    print("  📊 EVALUACIÓN DEL MODELO OHLCV")
+    print("  📊 EVALUACIÓN DEL MODELO")
     print("="*70)
     
     model.eval()
@@ -465,8 +551,14 @@ def evaluate_hybrid_model(model, test_loader, scaler_out, target_cols, device):
     predictions = np.array(predictions)
     targets = np.array(targets)
     
-    predictions_denorm = scaler_out.inverse_transform(predictions)
-    targets_denorm = scaler_out.inverse_transform(targets)
+    # Desnormalizar separadamente
+    pred_price = scalers['output_price'].inverse_transform(predictions[:, :4])
+    pred_volume = scalers['output_volume'].inverse_transform(predictions[:, 4:])
+    predictions_denorm = np.hstack([pred_price, pred_volume])
+    
+    target_price = scalers['output_price'].inverse_transform(targets[:, :4])
+    target_volume = scalers['output_volume'].inverse_transform(targets[:, 4:])
+    targets_denorm = np.hstack([target_price, target_volume])
     
     metrics = {}
     print()
@@ -498,22 +590,23 @@ def evaluate_hybrid_model(model, test_loader, scaler_out, target_cols, device):
 # ================================
 # 🎨 VISUALIZACIÓN
 # ================================
-def plot_hybrid_results(train_losses, val_losses, metrics, predictions, targets):
+def plot_enhanced_results(train_losses, val_losses, metrics, predictions, targets):
     fig = plt.figure(figsize=(20, 14))
     gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
-    fig.suptitle('ADAUSD LSTM Híbrido - Predicción OHLCV Completo', fontsize=16, fontweight='bold')
+    fig.suptitle('ADAUSD LSTM Mejorado - Predicción OHLCV', fontsize=16, fontweight='bold')
     
     # Pérdidas
     ax1 = fig.add_subplot(gs[0, 0])
     ax1.plot(train_losses, label='Train', linewidth=2, color='blue', alpha=0.7)
     ax1.plot(val_losses, label='Val', linewidth=2, color='orange', alpha=0.7)
-    ax1.set_title('Pérdida durante Entrenamiento')
+    ax1.set_title('Loss durante Entrenamiento')
     ax1.set_xlabel('Época')
-    ax1.set_ylabel('Pérdida')
+    ax1.set_ylabel('Loss')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
+    ax1.set_yscale('log')
     
-    # R²
+    # R² comparación
     ax2 = fig.add_subplot(gs[0, 1])
     targets_names = list(metrics.keys())
     r2_scores = [metrics[t]['R2'] for t in targets_names]
@@ -546,83 +639,32 @@ def plot_hybrid_results(train_losses, val_losses, metrics, predictions, targets)
         ax3.text(bar.get_x() + bar.get_width()/2., height,
                 f'{acc:.1f}%', ha='center', va='bottom', fontsize=9)
     
-    # Scatterplots (primera fila)
-    sample_size = min(200, len(predictions))
+    # Scatterplots
+    sample_size = min(300, len(predictions))
+    titles = ['Open', 'High', 'Low', 'Close', 'Volume']
     
-    # Open
-    ax4 = fig.add_subplot(gs[1, 0])
-    ax4.scatter(targets[:sample_size, 0], predictions[:sample_size, 0], 
-              alpha=0.6, s=20, color=colors[0])
-    ax4.plot([targets[:, 0].min(), targets[:, 0].max()],
-           [targets[:, 0].min(), targets[:, 0].max()], 'r--', alpha=0.7)
-    ax4.set_title(f'delta_open (R²={metrics["delta_open"]["R2"]:.3f})')
-    ax4.set_xlabel('Real')
-    ax4.set_ylabel('Predicción')
-    ax4.grid(True, alpha=0.3)
+    for idx, (title, color) in enumerate(zip(titles, colors)):
+        row = 1 + idx // 3
+        col = idx % 3
+        ax = fig.add_subplot(gs[row, col])
+        
+        ax.scatter(targets[:sample_size, idx], predictions[:sample_size, idx], 
+                  alpha=0.5, s=15, color=color, edgecolors='black', linewidth=0.3)
+        
+        # Línea ideal
+        min_val, max_val = targets[:, idx].min(), targets[:, idx].max()
+        ax.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.7, linewidth=2)
+        
+        r2 = metrics[f'delta_{title.lower()}']['R2']
+        acc = metrics[f'delta_{title.lower()}']['Direction_Accuracy']
+        ax.set_title(f'{title} (R²={r2:.3f}, Acc={acc:.1f}%)')
+        ax.set_xlabel('Real')
+        ax.set_ylabel('Predicción')
+        ax.grid(True, alpha=0.3)
     
-    # High
-    ax5 = fig.add_subplot(gs[1, 1])
-    ax5.scatter(targets[:sample_size, 1], predictions[:sample_size, 1], 
-              alpha=0.6, s=20, color=colors[1])
-    ax5.plot([targets[:, 1].min(), targets[:, 1].max()],
-           [targets[:, 1].min(), targets[:, 1].max()], 'r--', alpha=0.7)
-    ax5.set_title(f'delta_high (R²={metrics["delta_high"]["R2"]:.3f})')
-    ax5.set_xlabel('Real')
-    ax5.set_ylabel('Predicción')
-    ax5.grid(True, alpha=0.3)
-    
-    # Low
-    ax6 = fig.add_subplot(gs[1, 2])
-    ax6.scatter(targets[:sample_size, 2], predictions[:sample_size, 2], 
-              alpha=0.6, s=20, color=colors[2])
-    ax6.plot([targets[:, 2].min(), targets[:, 2].max()],
-           [targets[:, 2].min(), targets[:, 2].max()], 'r--', alpha=0.7)
-    ax6.set_title(f'delta_low (R²={metrics["delta_low"]["R2"]:.3f})')
-    ax6.set_xlabel('Real')
-    ax6.set_ylabel('Predicción')
-    ax6.grid(True, alpha=0.3)
-    
-    # Scatterplots (segunda fila)
-    
-    # Close
-    ax7 = fig.add_subplot(gs[2, 0])
-    ax7.scatter(targets[:sample_size, 3], predictions[:sample_size, 3], 
-              alpha=0.6, s=20, color=colors[3])
-    ax7.plot([targets[:, 3].min(), targets[:, 3].max()],
-           [targets[:, 3].min(), targets[:, 3].max()], 'r--', alpha=0.7)
-    ax7.set_title(f'delta_close (R²={metrics["delta_close"]["R2"]:.3f})')
-    ax7.set_xlabel('Real')
-    ax7.set_ylabel('Predicción')
-    ax7.grid(True, alpha=0.3)
-    
-    # Volume
-    ax8 = fig.add_subplot(gs[2, 1])
-    ax8.scatter(targets[:sample_size, 4], predictions[:sample_size, 4], 
-              alpha=0.6, s=20, color=colors[4])
-    ax8.plot([targets[:, 4].min(), targets[:, 4].max()],
-           [targets[:, 4].min(), targets[:, 4].max()], 'r--', alpha=0.7)
-    ax8.set_title(f'delta_volume (R²={metrics["delta_volume"]["R2"]:.3f})')
-    ax8.set_xlabel('Real')
-    ax8.set_ylabel('Predicción')
-    ax8.grid(True, alpha=0.3)
-    
-    # MAE comparison
-    ax9 = fig.add_subplot(gs[2, 2])
-    mae_scores = [metrics[t]['MAE'] for t in targets_names]
-    bars = ax9.bar(targets_names, mae_scores, color=colors)
-    ax9.set_title('MAE por Target')
-    ax9.set_ylabel('MAE')
-    ax9.grid(True, alpha=0.3, axis='y')
-    ax9.tick_params(axis='x', rotation=45)
-    
-    for bar, mae in zip(bars, mae_scores):
-        height = bar.get_height()
-        ax9.text(bar.get_x() + bar.get_width()/2., height,
-                f'{mae:.4f}', ha='center', va='bottom', fontsize=8)
-    
-    plt.savefig('adausd_hybrid_ohlcv_results.png', dpi=150, bbox_inches='tight')
+    plt.savefig('adausd_enhanced_ohlcv_results.png', dpi=150, bbox_inches='tight')
     plt.close()
-    print("📈 Gráficas guardadas en 'adausd_hybrid_ohlcv_results.png'")
+    print("📈 Gráficas guardadas en 'adausd_enhanced_ohlcv_results.png'")
 
 # ================================
 # 🚀 MAIN
@@ -630,20 +672,18 @@ def plot_hybrid_results(train_losses, val_losses, metrics, predictions, targets)
 def main():
     try:
         print("\n" + "="*70)
-        print("  🚀 LSTM HÍBRIDO - PREDICCIÓN OHLCV COMPLETO")
+        print("  🚀 LSTM MEJORADO - PREDICCIÓN OHLCV")
         print("="*70)
         
-        print("\n⚙️  CONFIGURACIÓN OPTIMIZADA:")
-        print(f"   Targets: Open, High, Low, Close, Volume (5 valores)")
-        print(f"   Sequence Length: {Config.SEQ_LEN}")
-        print(f"   Hidden Size: {Config.HIDDEN_SIZE}")
-        print(f"   Layers: {Config.NUM_LAYERS}")
-        print(f"   Dropout: {Config.DROPOUT}")
-        print(f"   Bidireccional: {Config.BIDIRECTIONAL}")
-        print(f"   Batch Size: {Config.BATCH_SIZE}")
-        print(f"   Learning Rate: {Config.LEARNING_RATE}")
-        print(f"   Weight Decay: {Config.WEIGHT_DECAY}")
-        print(f"   Patience: {Config.PATIENCE}")
+        print("\n⚙️  MEJORAS IMPLEMENTADAS:")
+        print("   ✅ Volumen con log-normalización")
+        print("   ✅ Scalers separados para precio/volumen")
+        print("   ✅ Arquitectura más robusta (128 hidden, 3 layers)")
+        print("   ✅ Cabezas separadas para precio y volumen")
+        print("   ✅ Feature engineering mejorado (+20 indicadores)")
+        print("   ✅ Loss balanceado (precio 1.0, volumen 0.1)")
+        print("   ✅ SEQ_LEN aumentado a 90")
+        print("   ✅ Learning rate reducido (0.0001)")
         
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"\n🖥️  Device: {device}")
@@ -673,14 +713,14 @@ def main():
         print(f"✅ Datos descargados: {len(df):,} velas")
         
         (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
-        scaler_in, scaler_out, feature_cols, target_cols = prepare_hybrid_dataset(df)
+        scalers, feature_cols, target_cols = prepare_enhanced_dataset(df)
         
         input_size = len(feature_cols)
         output_size = len(target_cols)
         
-        print(f"\n📊 Dimensiones del modelo:")
-        print(f"   Input size: {input_size}")
-        print(f"   Output size: {output_size} (OHLCV)")
+        print(f"\n📊 Dimensiones:")
+        print(f"   Input: {input_size} features")
+        print(f"   Output: {output_size} targets")
         
         train_dataset = torch.utils.data.TensorDataset(
             torch.FloatTensor(X_train_seq), 
@@ -705,7 +745,7 @@ def main():
             test_dataset, batch_size=Config.BATCH_SIZE, shuffle=False
         )
         
-        model = HybridLSTM(
+        model = EnhancedLSTM(
             input_size=input_size,
             hidden_size=Config.HIDDEN_SIZE,
             num_layers=Config.NUM_LAYERS,
@@ -715,30 +755,41 @@ def main():
         ).to(device)
         
         total_params = sum(p.numel() for p in model.parameters())
-        print(f"\n🧠 Modelo creado: {total_params:,} parámetros")
+        print(f"\n🧠 Modelo: {total_params:,} parámetros")
         
         start_time = time.time()
-        train_losses, val_losses = train_hybrid_model(model, train_loader, val_loader, device)
+        train_losses, val_losses = train_enhanced_model(model, train_loader, val_loader, device)
         training_time = time.time() - start_time
         
-        print(f"\n⏱️  Tiempo de entrenamiento: {training_time/60:.1f} minutos")
+        print(f"\n⏱️  Tiempo: {training_time/60:.1f} min")
         
-        predictions, targets, metrics = evaluate_hybrid_model(
-            model, test_loader, scaler_out, target_cols, device
+        predictions, targets, metrics = evaluate_enhanced_model(
+            model, test_loader, scalers, target_cols, device
         )
         
         print("="*70)
-        print("  📈 RESULTADOS FINALES - OHLCV")
+        print("  📈 RESULTADOS FINALES")
         print("="*70)
         
-        avg_r2 = np.mean([metrics[t]['R2'] for t in metrics.keys()])
-        avg_accuracy = np.mean([metrics[t]['Direction_Accuracy'] for t in metrics.keys()])
+        # Separar métricas de precio y volumen
+        price_metrics = {k: v for k, v in metrics.items() if 'volume' not in k}
+        volume_metrics = {k: v for k, v in metrics.items() if 'volume' in k}
         
-        print(f"\n📊 Métricas promedio:")
-        print(f"   R² promedio: {avg_r2:.4f}")
-        print(f"   Accuracy direccional promedio: {avg_accuracy:.2f}%")
+        avg_r2_price = np.mean([m['R2'] for m in price_metrics.values()])
+        avg_acc_price = np.mean([m['Direction_Accuracy'] for m in price_metrics.values()])
         
-        plot_hybrid_results(train_losses, val_losses, metrics, predictions, targets)
+        print(f"\n📊 Precio (OHLC):")
+        print(f"   R² promedio: {avg_r2_price:.4f}")
+        print(f"   Accuracy promedio: {avg_acc_price:.2f}%")
+        
+        if volume_metrics:
+            vol_r2 = volume_metrics['delta_volume']['R2']
+            vol_acc = volume_metrics['delta_volume']['Direction_Accuracy']
+            print(f"\n📊 Volumen:")
+            print(f"   R²: {vol_r2:.4f}")
+            print(f"   Accuracy: {vol_acc:.2f}%")
+        
+        plot_enhanced_results(train_losses, val_losses, metrics, predictions, targets)
         
         model_dir = 'ADAUSD_MODELS'
         os.makedirs(model_dir, exist_ok=True)
@@ -761,9 +812,12 @@ def main():
             'best_val_loss': min(val_losses)
         }
         
-        torch.save(model_config, f'{model_dir}/adausd_hybrid_lstm_ohlcv.pth')
-        joblib.dump(scaler_in, f'{model_dir}/scaler_input_hybrid_ohlcv.pkl')
-        joblib.dump(scaler_out, f'{model_dir}/scaler_output_hybrid_ohlcv.pkl')
+        torch.save(model_config, f'{model_dir}/adausd_enhanced_lstm_ohlcv.pth')
+        
+        # Guardar scalers
+        joblib.dump(scalers['input'], f'{model_dir}/scaler_input_enhanced.pkl')
+        joblib.dump(scalers['output_price'], f'{model_dir}/scaler_output_price_enhanced.pkl')
+        joblib.dump(scalers['output_volume'], f'{model_dir}/scaler_output_volume_enhanced.pkl')
         
         json_config = {
             'input_size': input_size,
@@ -771,36 +825,35 @@ def main():
             'num_layers': Config.NUM_LAYERS,
             'output_size': output_size,
             'seq_len': Config.SEQ_LEN,
-            'bidirectional': Config.BIDIRECTIONAL,
             'feature_cols': feature_cols,
             'target_cols': target_cols,
             'metrics_test': metrics,
             'timestamp': datetime.now().isoformat()
         }
         
-        with open(f'{model_dir}/config_hybrid_ohlcv.json', 'w') as f:
+        with open(f'{model_dir}/config_enhanced_ohlcv.json', 'w') as f:
             json.dump(json_config, f, indent=2)
         
         print(f"\n💾 Modelo guardado en '{model_dir}/'")
         
         msg = f"""
-✅ *LSTM Híbrido OHLCV*
+✅ *LSTM Mejorado OHLCV*
 
-📊 *Resultados:*
-   • R² promedio: {avg_r2:.4f}
-   • Accuracy direccional: {avg_accuracy:.2f}%
-   • Tiempo: {training_time/60:.1f} min
-   • Épocas: {len(train_losses)}
-   • Mejor val loss: {min(val_losses):.6f}
+📊 *Precio (OHLC):*
+   • R² promedio: {avg_r2_price:.4f}
+   • Accuracy: {avg_acc_price:.2f}%
 
-🎯 *Predicciones:*
-   • Open, High, Low, Close, Volume
+📊 *Volumen:*
+   • R²: {vol_r2:.4f}
+   • Accuracy: {vol_acc:.2f}%
 
-🎯 *Configuración:*
-   • Hidden: {Config.HIDDEN_SIZE}
-   • Seq Len: {Config.SEQ_LEN}
-   • Dropout: {Config.DROPOUT}
-   • LR: {Config.LEARNING_RATE}
+⚙️ *Mejoras:*
+   • Log-normalización volumen
+   • Cabezas separadas precio/volumen
+   • {total_params:,} parámetros
+   • {len(feature_cols)} features
+
+⏱️ *Tiempo:* {training_time/60:.1f} min
 """
         send_telegram(msg)
         
