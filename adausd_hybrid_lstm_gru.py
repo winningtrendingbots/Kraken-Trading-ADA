@@ -42,11 +42,11 @@ class Config:
     USE_ATTENTION = True
     
     # Entrenamiento
-    BATCH_SIZE = 128
-    EPOCHS = 200
+    BATCH_SIZE = 256  # ⚡ Aumentado para más velocidad
+    EPOCHS = 100      # ⚡ Reducido para caber en GitHub Actions (50 min)
     LEARNING_RATE = 0.001
     WEIGHT_DECAY = 1e-5
-    PATIENCE = 30  # ✅ PATIENCE CORRECTO
+    PATIENCE = 20     # ✅ Ajustado proporcionalmente
     MIN_DELTA = 1e-5
     GRAD_CLIP = 1.0
     TEACHER_FORCING_RATIO = 0.8
