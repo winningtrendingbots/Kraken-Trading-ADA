@@ -1,0 +1,95 @@
+{
+  "input_size": 48,
+  "encoder_hidden": 128,
+  "decoder_hidden": 128,
+  "feature_cols": [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "log_volume",
+    "volume_ma_5",
+    "volume_ma_20",
+    "volume_ratio",
+    "sma_5",
+    "close_sma_5_ratio",
+    "sma_10",
+    "close_sma_10_ratio",
+    "sma_20",
+    "close_sma_20_ratio",
+    "sma_50",
+    "close_sma_50_ratio",
+    "ema_9",
+    "ema_21",
+    "rsi",
+    "rsi_ma",
+    "ema_12",
+    "ema_26",
+    "macd",
+    "macd_signal",
+    "macd_histogram",
+    "bb_middle",
+    "bb_std",
+    "bb_upper",
+    "bb_lower",
+    "bb_position",
+    "tr1",
+    "tr2",
+    "tr3",
+    "true_range",
+    "atr",
+    "atr_percent",
+    "returns",
+    "volatility_20",
+    "high_low_range",
+    "open_close_range",
+    "roc_10",
+    "roc_20",
+    "typical_price",
+    "vwap",
+    "vwap_distance",
+    "obv",
+    "obv_ma"
+  ],
+  "target_cols": [
+    "delta_open",
+    "delta_high",
+    "delta_low",
+    "delta_close",
+    "delta_volume"
+  ],
+  "metrics_test": {
+    "delta_open": {
+      "MAE": 0.0003612147702369839,
+      "RMSE": 0.0011185332362261058,
+      "R2": -5.936622619628906e-05,
+      "Direction_Accuracy": 48.56129286558928
+    },
+    "delta_high": {
+      "MAE": 0.00360428960993886,
+      "RMSE": 0.005626377808894905,
+      "R2": -0.01643204689025879,
+      "Direction_Accuracy": 86.716594402838
+    },
+    "delta_low": {
+      "MAE": 0.0039376150816679,
+      "RMSE": 0.012581723440558247,
+      "R2": -0.042633891105651855,
+      "Direction_Accuracy": 88.76625936145052
+    },
+    "delta_close": {
+      "MAE": 0.005857501644641161,
+      "RMSE": 0.008968481454780991,
+      "R2": -0.018137097358703613,
+      "Direction_Accuracy": 48.916042569964524
+    },
+    "delta_volume": {
+      "MAE": 4.567721366882324,
+      "RMSE": 7.1099075285616244,
+      "R2": -0.03923928737640381,
+      "Direction_Accuracy": 14.387071344107213
+    }
+  },
+  "timestamp": "2025-12-25T02:41:21.886062"
+}
