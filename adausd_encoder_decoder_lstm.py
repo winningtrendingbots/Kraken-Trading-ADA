@@ -32,27 +32,28 @@ warnings.filterwarnings('ignore')
 # ================================
 class Config:
     # Arquitectura Encoder-Decoder
-    SEQ_LEN = 90
+    SEQ_LEN = 120
     ENCODER_HIDDEN = 128
-    DECODER_HIDDEN = 128
-    ENCODER_LAYERS = 3
+    DECODER_HIDDEN = 160
+    ENCODER_LAYERS = 2
     DECODER_LAYERS = 2
-    DROPOUT = 0.3
+    DROPOUT = 0.25
     BIDIRECTIONAL_ENCODER = True
+    USE_ATTENTION = True
     
     # Entrenamiento
-    BATCH_SIZE = 64
-    EPOCHS = 250
-    LEARNING_RATE = 0.0001
-    WEIGHT_DECAY = 5e-5
-    PATIENCE = 30
-    MIN_DELTA = 1e-6
-    GRAD_CLIP = 1.0
-    TEACHER_FORCING_RATIO = 0.5  # 50% usa valores reales durante entrenamiento
+    BATCH_SIZE = 96
+    EPOCHS = 220
+    LEARNING_RATE = 0.00015
+    WEIGHT_DECAY = 3e-5
+    PATIENCE = 25
+    MIN_DELTA = 1e-5
+    GRAD_CLIP = 0.7
+    TEACHER_FORCING_RATIO = 0.4  # 50% usa valores reales durante entrenamiento
     
     # Loss weights
     PRICE_WEIGHT = 1.0
-    VOLUME_WEIGHT = 0.15
+    VOLUME_WEIGHT = 0.12
     CONSTRAINT_WEIGHT = 1.0
     
     # Datos
