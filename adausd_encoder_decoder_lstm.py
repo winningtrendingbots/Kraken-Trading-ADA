@@ -1,10 +1,8 @@
 """
-ENCODER LSTM + DECODER GRU - VERSIÓN CORREGIDA Y OPTIMIZADA
-✅ Fix: Error de pickle resuelto
-✅ Fix: Arquitectura mejorada para aprendizaje
-✅ Fix: Loss balanceado correctamente
-✅ Fix: Learning rate adaptativo
-✅ Checkpointing robusto
+ENCODER LSTM + DECODER GRU - PICKLE ERROR FIXED
+✅ Fix: TypeError cannot pickle 'mappingproxy' object
+✅ Fix: Solo guardamos state_dict y valores primitivos
+✅ Fix: Config y metadata en JSON separado
 """
 
 import pandas as pd
@@ -21,56 +19,82 @@ import json
 import joblib
 import yfinance as yf
 from tqdm.auto import tqdm
-import requests
-from datetime import datetime
 import warnings
 
 warnings.filterwarnings('ignore')
 
 # ================================
-# 🎛️ CONFIGURACIÓN CORREGIDA
+# 🎛️ CONFIGURACIÓN
 # ================================
 class Config:
-    # Arquitectura mejorada para mejor aprendizaje
+    # Arquitectura
     SEQ_LEN = 60
     ENCODER_HIDDEN = 128
     DECODER_HIDDEN = 128
     ENCODER_LAYERS = 2
-    DECODER_LAYERS = 2  # ⬆️ Aumentado a 2 para mejor capacidad
-    DROPOUT = 0.2  # ⬇️ Reducido - demasiado dropout causa underfitting
+    DECODER_LAYERS = 2
+    DROPOUT = 0.2
     BIDIRECTIONAL_ENCODER = True
     USE_ATTENTION = True
     
-    # Entrenamiento ajustado
+    # Entrenamiento
     BATCH_SIZE = 64
     EPOCHS = 150
-    LEARNING_RATE = 0.0005  # ⬆️ Aumentado - LR muy bajo causa convergencia lenta
-    WEIGHT_DECAY = 5e-5  # ⬇️ Reducido - demasiada regularización
-    PATIENCE = 25  # ⬆️ Aumentado para dar más tiempo
+    LEARNING_RATE = 0.0005
+    WEIGHT_DECAY = 5e-5
+    PATIENCE = 25
     MIN_DELTA = 1e-6
     GRAD_CLIP = 1.0
-    TEACHER_FORCING_RATIO = 0.7  # ⬆️ Más alto para mejor aprendizaje
+    TEACHER_FORCING_RATIO = 0.7
     TEACHER_FORCING_DECAY = 0.98
     
     # Checkpointing
     CHECKPOINT_EVERY = 10
     RESUME_TRAINING = True
     
-    # Loss weights ajustados
+    # Loss weights
     PRICE_WEIGHT = 1.0
-    VOLUME_WEIGHT = 0.3  # ⬇️ Reducido para enfocarse en precio primero
-    CONSTRAINT_WEIGHT = 0.05  # ⬇️ Muy reducido
+    VOLUME_WEIGHT = 0.3
+    CONSTRAINT_WEIGHT = 0.05
     
     # Warmup
-    WARMUP_EPOCHS = 5  # ⬇️ Reducido
+    WARMUP_EPOCHS = 5
     
     # Datos
     TRAIN_SIZE = 0.70
     VAL_SIZE = 0.15
     TEST_SIZE = 0.15
+    
+    @classmethod
+    def to_dict(cls):
+        """Convierte Config a dict con solo valores primitivos"""
+        return {
+            'seq_len': int(cls.SEQ_LEN),
+            'encoder_hidden': int(cls.ENCODER_HIDDEN),
+            'decoder_hidden': int(cls.DECODER_HIDDEN),
+            'encoder_layers': int(cls.ENCODER_LAYERS),
+            'decoder_layers': int(cls.DECODER_LAYERS),
+            'dropout': float(cls.DROPOUT),
+            'bidirectional_encoder': bool(cls.BIDIRECTIONAL_ENCODER),
+            'use_attention': bool(cls.USE_ATTENTION),
+            'batch_size': int(cls.BATCH_SIZE),
+            'epochs': int(cls.EPOCHS),
+            'learning_rate': float(cls.LEARNING_RATE),
+            'weight_decay': float(cls.WEIGHT_DECAY),
+            'patience': int(cls.PATIENCE),
+            'teacher_forcing_ratio': float(cls.TEACHER_FORCING_RATIO),
+            'teacher_forcing_decay': float(cls.TEACHER_FORCING_DECAY),
+            'price_weight': float(cls.PRICE_WEIGHT),
+            'volume_weight': float(cls.VOLUME_WEIGHT),
+            'constraint_weight': float(cls.CONSTRAINT_WEIGHT),
+            'warmup_epochs': int(cls.WARMUP_EPOCHS),
+            'train_size': float(cls.TRAIN_SIZE),
+            'val_size': float(cls.VAL_SIZE),
+            'test_size': float(cls.TEST_SIZE)
+        }
 
 # ================================
-# 📊 FEATURES OPTIMIZADAS
+# 📊 FEATURES
 # ================================
 def calculate_features(df):
     """Features esenciales pero completas"""
@@ -237,7 +261,7 @@ class GRUDecoder(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(encoder_hidden_size + decoder_hidden_size, decoder_hidden_size * 2),
             nn.LayerNorm(decoder_hidden_size * 2),
-            nn.GELU(),  # Mejor que ReLU
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(decoder_hidden_size * 2, decoder_hidden_size),
             nn.LayerNorm(decoder_hidden_size),
@@ -299,7 +323,7 @@ class HybridEncoderDecoder(nn.Module):
                 prev_output = pred.detach()
         
         outputs = torch.cat(outputs, dim=-1)
-        outputs = self.output_activation(outputs) * 0.15  # ⬆️ Aumentado para permitir variaciones mayores
+        outputs = self.output_activation(outputs) * 0.15
         return outputs
 
 # ================================
@@ -340,7 +364,7 @@ def prepare_dataset(df):
     print(f"📊 Train: {len(df_train)}, Val: {len(df_val)}, Test: {len(df_test)}")
     
     # Scalers
-    scaler_in = RobustScaler(quantile_range=(5, 95))  # Más robusto
+    scaler_in = RobustScaler(quantile_range=(5, 95))
     scaler_out_price = RobustScaler(quantile_range=(5, 95))
     scaler_out_volume = RobustScaler(quantile_range=(5, 95))
     
@@ -384,13 +408,13 @@ def prepare_dataset(df):
            scalers, feature_cols, target_cols
 
 # ================================
-# 🏋️ LOSS MEJORADO
+# 🏋️ LOSS
 # ================================
 class ImprovedHybridLoss(nn.Module):
     def __init__(self, price_weight=1.0, volume_weight=0.3, constraint_weight=0.05):
         super().__init__()
         self.mse = nn.MSELoss()
-        self.huber = nn.HuberLoss(delta=1.0)  # Más robusto a outliers
+        self.huber = nn.HuberLoss(delta=1.0)
         self.price_weight = price_weight
         self.volume_weight = volume_weight
         self.constraint_weight = constraint_weight
@@ -401,11 +425,9 @@ class ImprovedHybridLoss(nn.Module):
         target_price = targets[:, :4]
         target_volume = targets[:, 4:]
         
-        # Usar Huber loss que es más robusto
         price_loss = self.huber(pred_price, target_price)
         volume_loss = self.huber(pred_volume, target_volume)
         
-        # Constraints MUY suaves
         delta_high = predictions[:, 1]
         delta_low = predictions[:, 2]
         delta_close = predictions[:, 3]
@@ -490,7 +512,6 @@ def train_model(model, train_loader, val_loader, device):
         optimizer, mode='min', factor=0.5, patience=10, min_lr=1e-6, verbose=True
     )
     
-    # Warmup scheduler
     warmup_scheduler = optim.lr_scheduler.LinearLR(
         optimizer, start_factor=0.1, total_iters=Config.WARMUP_EPOCHS
     )
@@ -520,7 +541,6 @@ def train_model(model, train_loader, val_loader, device):
     
     print(f"⚙️ Config: LR={Config.LEARNING_RATE}, Batch={Config.BATCH_SIZE}, Epochs={Config.EPOCHS}")
     print(f"💾 Checkpoint cada {Config.CHECKPOINT_EVERY} épocas")
-    print(f"🔥 Warmup: {Config.WARMUP_EPOCHS} épocas")
     
     epoch_bar = tqdm(range(start_epoch, Config.EPOCHS), desc="Training", unit="epoch", 
                      initial=start_epoch, total=Config.EPOCHS)
@@ -573,7 +593,6 @@ def train_model(model, train_loader, val_loader, device):
         else:
             scheduler.step(val_loss)
         
-        # Decay teacher forcing
         teacher_forcing_ratio *= Config.TEACHER_FORCING_DECAY
         teacher_forcing_ratio = max(teacher_forcing_ratio, 0.1)
         
@@ -604,7 +623,6 @@ def train_model(model, train_loader, val_loader, device):
             'time': f'{epoch_time:.1f}s'
         })
         
-        # Logging detallado cada 20 épocas
         if (epoch + 1) % 20 == 0:
             print(f"\n📊 Epoch {epoch+1}:")
             print(f"   Train: {train_loss:.4f} | Val: {val_loss:.4f} | Best: {best_val_loss:.4f}")
@@ -710,25 +728,17 @@ def plot_results(train_losses, val_losses, metrics):
     print("📈 Plot saved: corrected_results.png")
 
 # ================================
-# 🚀 MAIN
+# 🚀 MAIN - PICKLE FIX CRÍTICO
 # ================================
 def main():
     try:
         print("\n" + "="*70)
-        print("  🚀 LSTM-GRU CORREGIDO Y OPTIMIZADO")
+        print("  🚀 LSTM-GRU - PICKLE ERROR FIXED")
         print("="*70)
-        print("\n🔧 CORRECCIONES V2:")
-        print("   ✅ Fix: Error de pickle resuelto 100%")
-        print("   ✅ Fix: Metadata en JSON separado")
-        print("   ✅ Fix: Learning rate aumentado (0.0001→0.0005)")
-        print("   ✅ Fix: Dropout reducido (0.3→0.2) para evitar underfitting")
-        print("   ✅ Fix: Decoder 2 layers para mejor capacidad")
-        print("   ✅ Fix: Huber loss (más robusto que MSE+MAE)")
-        print("   ✅ Fix: Output scale 0.15 para variaciones mayores")
-        print("   ✅ Fix: Teacher forcing 0.7 para mejor aprendizaje")
-        print("   ✅ Fix: Weight decay reducido (1e-4→5e-5)")
-        print("   ✅ Fix: Decoder con GELU y más capas")
-        print("   🔍 Logging detallado cada 20 épocas")
+        print("\n🔧 FIX: TypeError cannot pickle 'mappingproxy' object")
+        print("   ✅ Solo guardamos state_dict del modelo")
+        print("   ✅ Config y metadata en JSON separado")
+        print("   ✅ Valores convertidos a tipos nativos Python")
         
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"\n🖥️ Device: {device}")
@@ -816,59 +826,79 @@ def main():
         
         plot_results(train_losses, val_losses, metrics)
         
-        model_dir = 'CORRECTED_MODELS'
+        # ================================
+        # 🔒 FIX CRÍTICO PICKLE ERROR
+        # ================================
+        model_dir = 'ADAUSD_MODELS'
         os.makedirs(model_dir, exist_ok=True)
         
-        # FIX: Convertir TODOS los valores a tipos nativos Python
-        config_dict = {
-            'seq_len': int(Config.SEQ_LEN),
-            'encoder_hidden': int(Config.ENCODER_HIDDEN),
-            'decoder_hidden': int(Config.DECODER_HIDDEN),
-            'encoder_layers': int(Config.ENCODER_LAYERS),
-            'decoder_layers': int(Config.DECODER_LAYERS),
-            'dropout': float(Config.DROPOUT),
-            'batch_size': int(Config.BATCH_SIZE),
-            'learning_rate': float(Config.LEARNING_RATE)
-        }
+        # 1️⃣ GUARDAR SOLO STATE_DICT DEL MODELO
+        # NO incluimos config ni nada más que pueda tener objetos no serializables
+        print("\n💾 Guardando modelo...")
+        torch.save(
+            model.state_dict(),  # ✅ SOLO state_dict, nada más
+            f'{model_dir}/hybrid_lstm_gru.pth'
+        )
+        print("   ✅ hybrid_lstm_gru.pth")
+        
+        # 2️⃣ METADATA EN JSON SEPARADO
+        # Convertir TODOS los valores a tipos nativos Python
+        from datetime import datetime
+        
+        def convert_to_native(obj):
+            """Convierte numpy/torch types a tipos nativos Python"""
+            if isinstance(obj, (np.integer, np.int64, np.int32)):
+                return int(obj)
+            elif isinstance(obj, (np.floating, np.float64, np.float32)):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, dict):
+                return {k: convert_to_native(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [convert_to_native(i) for i in obj]
+            else:
+                return obj
         
         # Convertir metrics a tipos nativos
-        metrics_clean = {}
-        for key, val in metrics.items():
-            metrics_clean[key] = {
-                k: float(v) if isinstance(v, (np.floating, np.integer)) else v 
-                for k, v in val.items()
-            }
+        metrics_clean = convert_to_native(metrics)
         
-        # Guardar modelo
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'config': config_dict,
+        # Config dict con tipos primitivos
+        config_dict = Config.to_dict()
+        
+        metadata = {
+            'model_type': 'HybridEncoderDecoder',
+            'architecture': {
+                'encoder': 'Bi-LSTM',
+                'decoder': 'GRU',
+                'attention': 'Bahdanau'
+            },
             'input_size': int(input_size),
-            'timestamp': datetime.now().isoformat()
-        }, f'{model_dir}/lstm_gru_corrected.pth')
+            'feature_cols': feature_cols,
+            'target_cols': target_cols,
+            'config': config_dict,
+            'metrics_test': metrics_clean,
+            'training_time_minutes': float(training_time / 60),
+            'total_params': int(total_params),
+            'timestamp': datetime.now().isoformat(),
+            'device': str(device)
+        }
         
-        # Guardar metadata en JSON separado
-        with open(f'{model_dir}/model_metadata.json', 'w') as f:
-            json.dump({
-                'feature_cols': feature_cols,
-                'target_cols': target_cols,
-                'metrics': metrics_clean,
-                'config': config_dict,
-                'training_time_minutes': float(training_time / 60),
-                'timestamp': datetime.now().isoformat()
-            }, f, indent=2)
+        with open(f'{model_dir}/config_hybrid_lstm_gru.json', 'w') as f:
+            json.dump(metadata, f, indent=2)
+        print("   ✅ config_hybrid_lstm_gru.json")
         
-        joblib.dump(scalers['input'], f'{model_dir}/scaler_input.pkl')
-        joblib.dump(scalers['output_price'], f'{model_dir}/scaler_output_price.pkl')
-        joblib.dump(scalers['output_volume'], f'{model_dir}/scaler_output_volume.pkl')
+        # 3️⃣ SCALERS
+        joblib.dump(scalers['input'], f'{model_dir}/scaler_input_hybrid.pkl')
+        joblib.dump(scalers['output_price'], f'{model_dir}/scaler_output_price_hybrid.pkl')
+        joblib.dump(scalers['output_volume'], f'{model_dir}/scaler_output_volume_hybrid.pkl')
+        print("   ✅ scaler_input_hybrid.pkl")
+        print("   ✅ scaler_output_price_hybrid.pkl")
+        print("   ✅ scaler_output_volume_hybrid.pkl")
         
-        print(f"\n💾 Archivos guardados en '{model_dir}/':")
-        print(f"   ✅ lstm_gru_corrected.pth (modelo PyTorch)")
-        print(f"   ✅ model_metadata.json (features, metrics, config)")
-        print(f"   ✅ scaler_*.pkl (3 scalers)")
-        print(f"   ✅ corrected_results.png (visualización)")
+        print(f"\n💾 Archivos guardados en '{model_dir}/'")
         print("\n" + "="*70)
-        print("  ✅ PROCESS COMPLETE")
+        print("  ✅ PROCESS COMPLETE - PICKLE ERROR FIXED")
         print("="*70 + "\n")
         
     except KeyboardInterrupt:
