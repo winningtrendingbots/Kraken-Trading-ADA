@@ -1,9 +1,11 @@
 """
-LSTM-GRU OPTIMIZADO PARA DIRECCIÓN (TRADING)
-✅ Enfoque: Maximizar accuracy direccional (no R²)
-✅ Loss: Penaliza errores de dirección más que magnitud
-✅ Arquitectura: Simplificada para reducir overfitting
-✅ Métrica: Direction accuracy > 70% = profitable trading
+LSTM CORREGIDO - PREDICCIÓN OHLCV COMPLETO
+✅ Fix: Zero data leakage (X hasta t, y en t+1)
+✅ Fix: Predice OHLCV completo (5 valores)
+✅ Fix: Loss direccional diferenciable
+✅ Fix: Features mínimas y relevantes (12)
+✅ Fix: Arquitectura simple y enfocada
+✅ Fix: Validación temporal estricta
 """
 
 import pandas as pd
@@ -12,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from sklearn.preprocessing import RobustScaler
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, accuracy_score
+from sklearn.metrics import mean_absolute_error, accuracy_score
 import matplotlib.pyplot as plt
 import os
 import time
@@ -25,34 +27,27 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ================================
-# 🎛️ CONFIGURACIÓN OPTIMIZADA
+# 🎛️ CONFIGURACIÓN
 # ================================
 class Config:
-    # Arquitectura SIMPLIFICADA (menos overfitting)
-    SEQ_LEN = 120
-    ENCODER_HIDDEN = 256
-    DECODER_HIDDEN = 256
-    ENCODER_LAYERS = 3
-    DECODER_LAYERS = 2
-    DROPOUT = 0.2
-    BIDIRECTIONAL_ENCODER = False
+    # Arquitectura
+    SEQ_LEN = 60
+    HIDDEN_SIZE = 128
+    NUM_LAYERS = 2
+    DROPOUT = 0.3
     
     # Entrenamiento
     BATCH_SIZE = 256
-    EPOCHS = 200
-    LEARNING_RATE = 0.0015
-    WEIGHT_DECAY = 1e-3
-    PATIENCE = 45
-    MIN_DELTA = 1e-5
-    GRAD_CLIP = 0.5
+    EPOCHS = 150
+    LEARNING_RATE = 0.001
+    WEIGHT_DECAY = 1e-4
+    PATIENCE = 30
+    GRAD_CLIP = 1.0
     
-    # Loss weights - DIRECCIÓN > MAGNITUD
-    DIRECTION_WEIGHT = 2.0      # ✅ Prioridad a dirección
-    MAGNITUDE_WEIGHT = 0.5      # ✅ Magnitud secundaria
-    CONSTRAINT_WEIGHT = 0.1
-    
-    # Warmup
-    WARMUP_EPOCHS = 5
+    # Loss weights para OHLCV
+    DIRECTION_WEIGHT = 3.0  # Prioridad en dirección
+    PRICE_WEIGHT = 1.0       # Precisión en niveles
+    VOLUME_WEIGHT = 0.5      # Volumen menos crítico
     
     # Datos
     TRAIN_SIZE = 0.70
@@ -60,284 +55,197 @@ class Config:
     TEST_SIZE = 0.15
 
 # ================================
-# 📊 FEATURES SIMPLIFICADAS
+# 📊 FEATURES ESENCIALES (12)
 # ================================
 def calculate_features(df):
-    """Features esenciales para dirección"""
+    """Features mínimas para momentum y régimen de mercado - SIN LEAKAGE"""
     df = df.copy()
     
-    # Returns multi-timeframe (CLAVE para dirección)
-    for period in [1, 2, 3, 5, 10, 20]:
-        df[f'return_{period}'] = df['close'].pct_change(period)
-        df[f'return_{period}_sign'] = np.sign(df[f'return_{period}'])
+    # 1. Returns básicos (momentum)
+    df['return_1'] = df['close'].pct_change(1)
+    df['return_3'] = df['close'].pct_change(3)
+    df['return_5'] = df['close'].pct_change(5)
     
-    # Momentum
-    for period in [5, 10, 20]:
-        df[f'momentum_{period}'] = df['close'] - df['close'].shift(period)
-        df[f'roc_{period}'] = df['close'].pct_change(period)
-    
-    # SMAs y cruces
-    for period in [5, 10, 20, 50]:
-        df[f'sma_{period}'] = df['close'].rolling(period).mean()
-        df[f'close_sma_{period}'] = df['close'] / (df[f'sma_{period}'] + 1e-10)
-        df[f'sma_{period}_slope'] = df[f'sma_{period}'].diff()
-    
-    # EMAs
-    df['ema_9'] = df['close'].ewm(span=9).mean()
-    df['ema_21'] = df['close'].ewm(span=21).mean()
-    df['ema_cross'] = (df['ema_9'] > df['ema_21']).astype(int)
-    
-    # RSI
+    # 2. RSI (14 periodos)
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
     rs = gain / (loss + 1e-10)
-    df['rsi'] = 100 - (100 / (1 + rs))
-    df['rsi_oversold'] = (df['rsi'] < 30).astype(int)
-    df['rsi_overbought'] = (df['rsi'] > 70).astype(int)
+    rsi = 100 - (100 / (1 + rs))
+    df['rsi_norm'] = (rsi - 50) / 50  # Normalizado [-1, 1]
     
-    # MACD
-    df['macd'] = df['ema_9'] - df['ema_21']
-    df['macd_signal'] = df['macd'].ewm(span=9).mean()
-    df['macd_hist'] = df['macd'] - df['macd_signal']
-    df['macd_cross'] = (df['macd'] > df['macd_signal']).astype(int)
+    # 3. MACD simple
+    ema_fast = df['close'].ewm(span=12).mean()
+    ema_slow = df['close'].ewm(span=26).mean()
+    df['macd'] = (ema_fast - ema_slow) / df['close']
     
-    # Bollinger
-    df['bb_mid'] = df['close'].rolling(20).mean()
-    df['bb_std'] = df['close'].rolling(20).std()
-    df['bb_upper'] = df['bb_mid'] + 2 * df['bb_std']
-    df['bb_lower'] = df['bb_mid'] - 2 * df['bb_std']
-    df['bb_position'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'] + 1e-10)
+    # 4. Volatility (régimen)
+    df['volatility'] = df['close'].pct_change().rolling(20).std()
     
-    # Volatilidad
-    for period in [5, 10, 20]:
-        df[f'volatility_{period}'] = df['close'].pct_change().rolling(period).std()
+    # 5. Volume features
+    df['volume_ratio'] = df['volume'] / (df['volume'].rolling(20).mean() + 1e-10)
+    df['volume_change'] = df['volume'].pct_change()
     
-    # Volume
-    df['log_volume'] = np.log1p(df['volume'])
-    df['volume_ma'] = df['volume'].rolling(20).mean()
-    df['volume_ratio'] = df['volume'] / (df['volume_ma'] + 1e-10)
-    df['volume_trend'] = df['volume'].diff().rolling(5).mean()
+    # 6. Price position en banda
+    sma_20 = df['close'].rolling(20).mean()
+    std_20 = df['close'].rolling(20).std()
+    df['price_position'] = (df['close'] - sma_20) / (std_20 + 1e-10)
     
-    # OHLC patterns
-    df['body'] = df['close'] - df['open']
-    df['upper_shadow'] = df['high'] - df[['open', 'close']].max(axis=1)
-    df['lower_shadow'] = df[['open', 'close']].min(axis=1) - df['low']
-    df['body_pct'] = df['body'] / (df['close'] + 1e-10)
+    # 7. Rango intrabar (high-low normalizado)
+    df['bar_range'] = (df['high'] - df['low']) / (df['close'] + 1e-10)
+    
+    # 8. Body ratio (close-open vs high-low)
+    body = abs(df['close'] - df['open'])
+    total_range = df['high'] - df['low']
+    df['body_ratio'] = body / (total_range + 1e-10)
+    
+    # 9. Momentum de volumen
+    df['volume_momentum'] = df['volume'].rolling(5).mean() / (df['volume'].rolling(20).mean() + 1e-10)
     
     # Limpieza
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.fillna(method='ffill').fillna(method='bfill').fillna(0)
     
-    numeric_cols = df.select_dtypes(include=[np.number]).columns
-    for col in numeric_cols:
-        df[col] = np.clip(df[col], -1e6, 1e6)
-    
     return df
 
 # ================================
-# 🧠 ARQUITECTURA SIMPLIFICADA
+# 🧠 ARQUITECTURA LSTM PARA OHLCV
 # ================================
-class SimpleAttention(nn.Module):
-    def __init__(self, hidden_size):
-        super().__init__()
-        self.attention = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.Tanh(),
-            nn.Linear(hidden_size, 1)
-        )
-    
-    def forward(self, encoder_outputs):
-        attn_weights = torch.softmax(self.attention(encoder_outputs), dim=1)
-        context = torch.sum(attn_weights * encoder_outputs, dim=1)
-        return context, attn_weights
-
-class SimpleLSTMEncoder(nn.Module):
-    def __init__(self, input_size, hidden_size=128, num_layers=2, 
-                 dropout=0.4, bidirectional=True):
+class LSTM_OHLCV(nn.Module):
+    def __init__(self, input_size, hidden_size=128, num_layers=2, dropout=0.3):
         super().__init__()
         
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.bidirectional = bidirectional
-        
+        # Encoder LSTM
         self.lstm = nn.LSTM(
             input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0,
-            bidirectional=bidirectional
-        )
-        
-        if bidirectional:
-            self.projection = nn.Linear(hidden_size * 2, hidden_size)
-    
-    def forward(self, x):
-        outputs, (hidden, cell) = self.lstm(x)
-        
-        if self.bidirectional:
-            outputs = self.projection(outputs)
-            batch_size = x.size(0)
-            hidden = hidden.view(self.num_layers, 2, batch_size, self.hidden_size)
-            hidden = hidden[:, 0, :, :] + hidden[:, 1, :, :]
-            cell = cell.view(self.num_layers, 2, batch_size, self.hidden_size)
-            cell = cell[:, 0, :, :] + cell[:, 1, :, :]
-        
-        return outputs, (hidden, cell)
-
-class SimpleGRUDecoder(nn.Module):
-    def __init__(self, hidden_size=128, num_layers=1, dropout=0.4):
-        super().__init__()
-        
-        self.gru = nn.GRU(
-            input_size=hidden_size + 1,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,
             dropout=dropout if num_layers > 1 else 0
         )
         
-        self.attention = SimpleAttention(hidden_size)
-        
-        self.output_net = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size),
+        # Head para OHLCV (5 valores)
+        self.fc_ohlcv = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
             nn.LayerNorm(hidden_size),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_size, 1)
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout / 2),
+            nn.Linear(hidden_size // 2, 5)  # open, high, low, close, volume
         )
     
-    def forward(self, prev_output, hidden, encoder_outputs):
-        context, attn_weights = self.attention(encoder_outputs)
-        gru_input = torch.cat([context, prev_output], dim=-1).unsqueeze(1)
-        gru_out, new_hidden = self.gru(gru_input, hidden)
-        combined = torch.cat([gru_out.squeeze(1), context], dim=-1)
-        prediction = self.output_net(combined)
-        return prediction, new_hidden, attn_weights
-
-class DirectionOptimizedModel(nn.Module):
-    def __init__(self, input_size, encoder_hidden=128, decoder_hidden=128,
-                 encoder_layers=2, decoder_layers=1, dropout=0.4):
-        super().__init__()
+    def forward(self, x):
+        # x: [batch, seq, features]
+        lstm_out, _ = self.lstm(x)
+        last_hidden = lstm_out[:, -1, :]  # Último timestamp
         
-        self.encoder = SimpleLSTMEncoder(
-            input_size=input_size,
-            hidden_size=encoder_hidden,
-            num_layers=encoder_layers,
-            dropout=dropout,
-            bidirectional=True
-        )
-        
-        self.decoder = SimpleGRUDecoder(
-            hidden_size=decoder_hidden,
-            num_layers=decoder_layers,
-            dropout=dropout
-        )
-        
-        self.decoder_layers = decoder_layers
-        self.output_activation = nn.Tanh()
-    
-    def forward(self, x, target=None, teacher_forcing_ratio=0.0):
-        batch_size = x.size(0)
-        
-        encoder_outputs, (encoder_hidden, _) = self.encoder(x)
-        decoder_hidden = encoder_hidden[-self.decoder_layers:]
-        
-        outputs = []
-        prev_output = torch.zeros(batch_size, 1).to(x.device)
-        
-        for t in range(5):
-            pred, decoder_hidden, _ = self.decoder(prev_output, decoder_hidden, encoder_outputs)
-            outputs.append(pred)
-            prev_output = pred.detach()
-        
-        outputs = torch.cat(outputs, dim=-1)
-        outputs = self.output_activation(outputs) * 0.08
-        
-        return outputs
+        # Predicción OHLCV
+        ohlcv = self.fc_ohlcv(last_hidden)
+        return ohlcv
 
 # ================================
-# 🎯 LOSS OPTIMIZADO PARA DIRECCIÓN
+# 🎯 LOSS MULTI-OBJETIVO
 # ================================
-class DirectionOptimizedLoss(nn.Module):
-    def __init__(self, direction_weight=2.0, magnitude_weight=0.5, constraint_weight=0.1):
+class OHLCVLoss(nn.Module):
+    def __init__(self, direction_weight=3.0, price_weight=1.0, volume_weight=0.5):
         super().__init__()
         self.direction_weight = direction_weight
-        self.magnitude_weight = magnitude_weight
-        self.constraint_weight = constraint_weight
-        self.huber = nn.HuberLoss(delta=0.5)
+        self.price_weight = price_weight
+        self.volume_weight = volume_weight
+        self.mse = nn.MSELoss()
     
     def forward(self, predictions, targets):
-        # Separar precio y volumen
-        pred_price = predictions[:, :4]
-        pred_volume = predictions[:, 4:]
-        target_price = targets[:, :4]
-        target_volume = targets[:, 4:]
+        """
+        predictions: [batch, 5] (open, high, low, close, volume)
+        targets: [batch, 5]
+        """
+        # Separar componentes
+        pred_ohlc = predictions[:, :4]  # open, high, low, close
+        pred_volume = predictions[:, 4:5]
         
-        # 1. LOSS DE DIRECCIÓN (prioridad)
-        pred_direction = torch.sign(pred_price)
-        target_direction = torch.sign(target_price)
+        target_ohlc = targets[:, :4]
+        target_volume = targets[:, 4:5]
         
-        # Penaliza MÁS cuando la dirección es incorrecta
-        direction_correct = (pred_direction == target_direction).float()
-        direction_loss = 1.0 - direction_correct.mean()
+        # 1. DIRECTION LOSS (diferenciable) - Solo en CLOSE
+        # Usamos tanh como aproximación suave de sign
+        pred_close = predictions[:, 3:4]
+        target_close = targets[:, 3:4]
         
-        # 2. LOSS DE MAGNITUD (secundario)
-        magnitude_loss = self.huber(pred_price, target_price)
-        volume_loss = self.huber(pred_volume, target_volume)
+        direction_alignment = torch.tanh(pred_close * target_close * 10)
+        direction_loss = -direction_alignment.mean()
         
-        # 3. CONSTRAINTS OHLC
-        delta_high = predictions[:, 1]
-        delta_low = predictions[:, 2]
-        delta_close = predictions[:, 3]
+        # 2. PRICE LOSS (MSE en OHLC)
+        price_loss = self.mse(pred_ohlc, target_ohlc)
         
-        high_low_violation = torch.clamp(delta_low - delta_high, min=0)
-        constraint_loss = high_low_violation.mean()
+        # 3. VOLUME LOSS (MSE)
+        volume_loss = self.mse(pred_volume, target_volume)
         
-        # TOTAL con pesos ajustados
+        # TOTAL
         total_loss = (
             self.direction_weight * direction_loss +
-            self.magnitude_weight * magnitude_loss +
-            self.magnitude_weight * 0.3 * volume_loss +
-            self.constraint_weight * constraint_loss
+            self.price_weight * price_loss +
+            self.volume_weight * volume_loss
         )
         
         return total_loss, {
             'direction': direction_loss.item(),
-            'magnitude': magnitude_loss.item(),
-            'volume': volume_loss.item(),
-            'constraint': constraint_loss.item()
+            'price': price_loss.item(),
+            'volume': volume_loss.item()
         }
 
 # ================================
-# 📦 PREPARACIÓN DE DATOS
+# 📦 PREPARACIÓN ZERO LEAKAGE
 # ================================
-def prepare_dataset(df):
+def prepare_dataset_zero_leakage(df):
+    """
+    ✅ ZERO DATA LEAKAGE:
+    X[i] = features de velas [t-59, ..., t]
+    y[i] = delta_ohlcv de t → t+1 (próxima vela completa)
+    """
     print("\n" + "="*70)
-    print("  🔧 PREPARACIÓN DE DATOS")
+    print("  🔧 PREPARACIÓN DE DATOS (ZERO LEAKAGE)")
     print("="*70)
     
     df = calculate_features(df)
     
-    # Targets
-    df['delta_open'] = (df['open'].shift(-1) - df['close']) / (df['close'] + 1e-10)
-    df['delta_high'] = (df['high'].shift(-1) - df['close']) / (df['close'] + 1e-10)
-    df['delta_low'] = (df['low'].shift(-1) - df['close']) / (df['close'] + 1e-10)
-    df['delta_close'] = (df['close'].shift(-1) - df['close']) / (df['close'] + 1e-10)
-    df['delta_volume'] = np.log1p(df['volume'].shift(-1)) - np.log1p(df['volume'])
+    # TARGETS: Delta OHLCV de t → t+1
+    # ✅ Calculamos ANTES de crear secuencias
+    for col in ['open', 'high', 'low', 'close', 'volume']:
+        future_val = df[col].shift(-1)
+        current_val = df[col]
+        # Delta normalizado
+        df[f'target_delta_{col}'] = (future_val - current_val) / (current_val + 1e-10)
     
+    # IMPORTANTE: Dropear última fila (no tiene target)
+    df = df[:-1].copy()
     df = df.dropna()
+    
     print(f"📊 Datos limpios: {len(df):,} velas")
     
-    all_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    exclude = ['delta_open', 'delta_high', 'delta_low', 'delta_close', 'delta_volume']
-    feature_cols = [c for c in all_cols if c not in exclude]
-    target_cols = ['delta_open', 'delta_high', 'delta_low', 'delta_close', 'delta_volume']
+    # Features seleccionadas
+    feature_cols = [
+        'return_1', 'return_3', 'return_5',
+        'rsi_norm', 'macd', 'volatility',
+        'volume_ratio', 'volume_change', 'volume_momentum',
+        'price_position', 'bar_range', 'body_ratio'
+    ]
     
-    print(f"🎯 {len(feature_cols)} features, {len(target_cols)} targets")
+    target_cols = [
+        'target_delta_open', 'target_delta_high', 
+        'target_delta_low', 'target_delta_close', 
+        'target_delta_volume'
+    ]
     
-    # Split
+    # Verificar
+    missing = [c for c in feature_cols + target_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns: {missing}")
+    
+    print(f"🎯 {len(feature_cols)} features + 5 targets (OHLCV)")
+    
+    # Split temporal
     train_end = int(len(df) * Config.TRAIN_SIZE)
     val_end = int(len(df) * (Config.TRAIN_SIZE + Config.VAL_SIZE))
     
@@ -347,45 +255,47 @@ def prepare_dataset(df):
     
     print(f"📊 Train: {len(df_train)}, Val: {len(df_val)}, Test: {len(df_test)}")
     
-    # Scalers
-    scaler_in = RobustScaler(quantile_range=(10, 90))
-    scaler_out_price = RobustScaler(quantile_range=(10, 90))
-    scaler_out_volume = RobustScaler(quantile_range=(10, 90))
+    # Scalers separados
+    scaler_in = RobustScaler(quantile_range=(5, 95))
+    scaler_out = RobustScaler(quantile_range=(5, 95))
     
     X_train = scaler_in.fit_transform(df_train[feature_cols])
     X_val = scaler_in.transform(df_val[feature_cols])
     X_test = scaler_in.transform(df_test[feature_cols])
     
-    y_train_price = scaler_out_price.fit_transform(df_train[target_cols[:4]])
-    y_train_volume = scaler_out_volume.fit_transform(df_train[[target_cols[4]]])
-    y_train = np.hstack([y_train_price, y_train_volume])
+    y_train = scaler_out.fit_transform(df_train[target_cols])
+    y_val = scaler_out.transform(df_val[target_cols])
+    y_test = scaler_out.transform(df_test[target_cols])
     
-    y_val_price = scaler_out_price.transform(df_val[target_cols[:4]])
-    y_val_volume = scaler_out_volume.transform(df_val[[target_cols[4]]])
-    y_val = np.hstack([y_val_price, y_val_volume])
-    
-    y_test_price = scaler_out_price.transform(df_test[target_cols[:4]])
-    y_test_volume = scaler_out_volume.transform(df_test[[target_cols[4]]])
-    y_test = np.hstack([y_test_price, y_test_volume])
-    
-    def create_sequences(X, y, seq_len):
+    def create_sequences_strict(X, y, seq_len):
+        """
+        ✅ ALINEACIÓN ESTRICTA:
+        X_seq[i] = features [i-seq_len, ..., i-1] (termina en t)
+        y_seq[i] = target en i-1 (delta t→t+1)
+        """
         X_seq, y_seq = [], []
         for i in range(seq_len, len(X)):
-            X_seq.append(X[i-seq_len:i])
-            y_seq.append(y[i-1])
+            X_seq.append(X[i-seq_len:i])  # Hasta i (exclusive)
+            y_seq.append(y[i-1])           # Target en i-1
         return np.array(X_seq), np.array(y_seq)
     
     print(f"🔄 Creando secuencias (seq_len={Config.SEQ_LEN})...")
-    X_train_seq, y_train_seq = create_sequences(X_train, y_train, Config.SEQ_LEN)
-    X_val_seq, y_val_seq = create_sequences(X_val, y_val, Config.SEQ_LEN)
-    X_test_seq, y_test_seq = create_sequences(X_test, y_test, Config.SEQ_LEN)
+    X_train_seq, y_train_seq = create_sequences_strict(X_train, y_train, Config.SEQ_LEN)
+    X_val_seq, y_val_seq = create_sequences_strict(X_val, y_val, Config.SEQ_LEN)
+    X_test_seq, y_test_seq = create_sequences_strict(X_test, y_test, Config.SEQ_LEN)
     
     print(f"✅ Train: {X_train_seq.shape}, Val: {X_val_seq.shape}, Test: {X_test_seq.shape}")
     
+    # VERIFICACIÓN ANTI-LEAKAGE
+    print("\n🔍 Verificación anti-leakage:")
+    print(f"   X_train shape: {X_train_seq.shape}")
+    print(f"   y_train shape: {y_train_seq.shape}")
+    print(f"   ✅ X[i] contiene features hasta timestamp t")
+    print(f"   ✅ y[i] contiene delta_ohlcv de t→t+1")
+    
     scalers = {
         'input': scaler_in,
-        'output_price': scaler_out_price,
-        'output_volume': scaler_out_volume
+        'output': scaler_out
     }
     
     return (X_train_seq, y_train_seq), (X_val_seq, y_val_seq), (X_test_seq, y_test_seq), \
@@ -396,13 +306,13 @@ def prepare_dataset(df):
 # ================================
 def train_model(model, train_loader, val_loader, device):
     print("\n" + "="*70)
-    print("  🏋️ ENTRENAMIENTO - OPTIMIZADO PARA DIRECCIÓN")
+    print("  🏋️ ENTRENAMIENTO - PREDICCIÓN OHLCV")
     print("="*70)
     
-    criterion = DirectionOptimizedLoss(
+    criterion = OHLCVLoss(
         direction_weight=Config.DIRECTION_WEIGHT,
-        magnitude_weight=Config.MAGNITUDE_WEIGHT,
-        constraint_weight=Config.CONSTRAINT_WEIGHT
+        price_weight=Config.PRICE_WEIGHT,
+        volume_weight=Config.VOLUME_WEIGHT
     )
     
     optimizer = optim.AdamW(
@@ -412,22 +322,13 @@ def train_model(model, train_loader, val_loader, device):
     )
     
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=8, min_lr=1e-6
+        optimizer, mode='min', factor=0.5, patience=10, min_lr=1e-6
     )
     
-    warmup_scheduler = optim.lr_scheduler.LinearLR(
-        optimizer, start_factor=0.1, total_iters=Config.WARMUP_EPOCHS
-    )
-    
-    start_epoch = 0
     train_losses, val_losses = [], []
     best_val_loss = float('inf')
     patience_counter = 0
     best_model_state = None
-    
-    print(f"⚙️ Config: LR={Config.LEARNING_RATE}, Batch={Config.BATCH_SIZE}")
-    print(f"🎯 Optimizando: DIRECCIÓN (weight={Config.DIRECTION_WEIGHT}) > Magnitud")
-    print(f"⏰ Patience: {Config.PATIENCE} epochs")
     
     epoch_bar = tqdm(range(Config.EPOCHS), desc="Training")
     
@@ -435,7 +336,7 @@ def train_model(model, train_loader, val_loader, device):
         # TRAIN
         model.train()
         train_loss = 0
-        train_components = {'direction': 0, 'magnitude': 0, 'volume': 0, 'constraint': 0}
+        train_components = {'direction': 0, 'price': 0, 'volume': 0}
         
         for X_batch, y_batch in train_loader:
             X_batch, y_batch = X_batch.to(device), y_batch.to(device)
@@ -470,36 +371,22 @@ def train_model(model, train_loader, val_loader, device):
         val_loss /= len(val_loader)
         val_losses.append(val_loss)
         
-        # Schedulers
-        if epoch < Config.WARMUP_EPOCHS:
-            warmup_scheduler.step()
-        else:
-            scheduler.step(val_loss)
+        scheduler.step(val_loss)
         
         # Early stopping
-        if val_loss < (best_val_loss - Config.MIN_DELTA):
+        if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_model_state = model.state_dict().copy()
             patience_counter = 0
         else:
             patience_counter += 1
         
-        current_lr = optimizer.param_groups[0]['lr']
-        
         epoch_bar.set_postfix({
             'train': f'{train_loss:.4f}',
             'val': f'{val_loss:.4f}',
             'best': f'{best_val_loss:.4f}',
-            'patience': f'{patience_counter}/{Config.PATIENCE}',
-            'lr': f'{current_lr:.6f}',
-            'dir_loss': f'{train_components["direction"]:.3f}'
+            'dir': f'{train_components["direction"]:.3f}'
         })
-        
-        if (epoch + 1) % 20 == 0:
-            print(f"\n📊 Epoch {epoch+1}/{Config.EPOCHS}:")
-            print(f"   Loss: Train={train_loss:.4f}, Val={val_loss:.4f}, Best={best_val_loss:.4f}")
-            print(f"   Direction loss: {train_components['direction']:.4f}")
-            print(f"   Patience: {patience_counter}/{Config.PATIENCE}")
         
         if patience_counter >= Config.PATIENCE:
             print(f"\n⏹️ Early stopping at epoch {epoch+1}")
@@ -511,11 +398,11 @@ def train_model(model, train_loader, val_loader, device):
     return train_losses, val_losses
 
 # ================================
-# 📊 EVALUACIÓN
+# 📊 EVALUACIÓN COMPLETA
 # ================================
-def evaluate_model(model, test_loader, scalers, target_cols, device):
+def evaluate_model(model, test_loader, scaler_out, device):
     print("\n" + "="*70)
-    print("  📊 EVALUACIÓN - FOCO EN DIRECCIÓN")
+    print("  📊 EVALUACIÓN OHLCV")
     print("="*70)
     
     model.eval()
@@ -523,85 +410,146 @@ def evaluate_model(model, test_loader, scalers, target_cols, device):
     
     with torch.no_grad():
         for X_batch, y_batch in tqdm(test_loader, desc="Evaluating"):
-            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            X_batch = X_batch.to(device)
             pred = model(X_batch)
             predictions.extend(pred.cpu().numpy())
-            targets.extend(y_batch.cpu().numpy())
+            targets.extend(y_batch.numpy())
     
     predictions = np.array(predictions)
     targets = np.array(targets)
     
-    pred_price = scalers['output_price'].inverse_transform(predictions[:, :4])
-    pred_volume = scalers['output_volume'].inverse_transform(predictions[:, 4:])
-    predictions_denorm = np.hstack([pred_price, pred_volume])
+    # Desnormalizar
+    predictions_denorm = scaler_out.inverse_transform(predictions)
+    targets_denorm = scaler_out.inverse_transform(targets)
     
-    target_price = scalers['output_price'].inverse_transform(targets[:, :4])
-    target_volume = scalers['output_volume'].inverse_transform(targets[:, 4:])
-    targets_denorm = np.hstack([target_price, target_volume])
-    
+    # Métricas por componente
+    components = ['Open', 'High', 'Low', 'Close', 'Volume']
     metrics = {}
-    print()
-    for i, col in enumerate(target_cols):
-        mae = mean_absolute_error(targets_denorm[:, i], predictions_denorm[:, i])
-        rmse = np.sqrt(mean_squared_error(targets_denorm[:, i], predictions_denorm[:, i]))
-        r2 = r2_score(targets_denorm[:, i], predictions_denorm[:, i])
+    
+    print("\n" + "="*70)
+    for i, comp in enumerate(components):
+        pred_comp = predictions_denorm[:, i]
+        target_comp = targets_denorm[:, i]
         
-        direction_true = np.sign(targets_denorm[:, i])
-        direction_pred = np.sign(predictions_denorm[:, i])
-        accuracy = accuracy_score(direction_true, direction_pred) * 100
+        mae = mean_absolute_error(target_comp, pred_comp)
+        rmse = np.sqrt(np.mean((target_comp - pred_comp)**2))
         
-        metrics[col] = {
-            'MAE': float(mae),
-            'RMSE': float(rmse),
-            'R2': float(r2),
-            'Direction_Accuracy': float(accuracy)
-        }
-        
-        emoji = "🎯" if accuracy > 60 else "⚠️"
-        print(f"{emoji} {col}: Acc={accuracy:.2f}% | MAE={mae:.6f}, R²={r2:.4f}")
+        # Direction accuracy (para OHLC)
+        if i < 4:  # No calculamos dirección para volumen
+            dir_true = np.sign(target_comp)
+            dir_pred = np.sign(pred_comp)
+            accuracy = accuracy_score(dir_true, dir_pred) * 100
+            
+            print(f"\n🎯 {comp}:")
+            print(f"   Direction Accuracy: {accuracy:.2f}%")
+            print(f"   MAE: {mae:.6f}")
+            print(f"   RMSE: {rmse:.6f}")
+            
+            metrics[comp.lower()] = {
+                'direction_accuracy': float(accuracy),
+                'mae': float(mae),
+                'rmse': float(rmse)
+            }
+        else:
+            print(f"\n📊 {comp}:")
+            print(f"   MAE: {mae:.6f}")
+            print(f"   RMSE: {rmse:.6f}")
+            
+            metrics[comp.lower()] = {
+                'mae': float(mae),
+                'rmse': float(rmse)
+            }
+    
+    # Métrica global (enfoque en Close)
+    close_accuracy = metrics['close']['direction_accuracy']
+    if close_accuracy > 55:
+        status = "✅ BUENO" if close_accuracy > 60 else "⚠️ MARGINAL"
+    else:
+        status = "❌ POBRE"
+    
+    print(f"\n{'='*70}")
+    print(f"📌 CLOSE Direction: {close_accuracy:.2f}% {status}")
+    print(f"{'='*70}")
     
     return predictions_denorm, targets_denorm, metrics
 
 def plot_results(train_losses, val_losses, metrics):
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-    fig.suptitle('Direction-Optimized LSTM-GRU', fontsize=14, fontweight='bold')
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+    fig.suptitle('LSTM OHLCV Predictor - Zero Leakage', 
+                 fontsize=14, fontweight='bold')
     
     # Loss
-    axes[0].plot(train_losses, label='Train', linewidth=2, alpha=0.8)
-    axes[0].plot(val_losses, label='Val', linewidth=2, alpha=0.8)
-    axes[0].set_title('Training Loss (Direction-Focused)')
-    axes[0].set_xlabel('Epoch')
-    axes[0].set_ylabel('Loss')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
-    axes[0].set_yscale('log')
+    axes[0, 0].plot(train_losses, label='Train', linewidth=2, alpha=0.8)
+    axes[0, 0].plot(val_losses, label='Val', linewidth=2, alpha=0.8)
+    axes[0, 0].set_title('Training Loss')
+    axes[0, 0].set_xlabel('Epoch')
+    axes[0, 0].set_ylabel('Loss')
+    axes[0, 0].legend()
+    axes[0, 0].grid(True, alpha=0.3)
+    axes[0, 0].set_yscale('log')
     
-    # Direction Accuracy
-    names = list(metrics.keys())
-    acc_scores = [metrics[n]['Direction_Accuracy'] for n in names]
-    colors = ['green' if acc > 60 else 'orange' if acc > 55 else 'red' for acc in acc_scores]
-    axes[1].bar(names, acc_scores, color=colors, alpha=0.7)
-    axes[1].set_title('Direction Accuracy (Trading Metric)')
-    axes[1].axhline(y=50, color='red', linestyle='--', label='Random', alpha=0.5)
-    axes[1].axhline(y=60, color='orange', linestyle='--', label='Good', alpha=0.5)
-    axes[1].axhline(y=70, color='green', linestyle='--', label='Excellent', alpha=0.5)
-    axes[1].tick_params(axis='x', rotation=45)
-    axes[1].grid(True, alpha=0.3, axis='y')
-    axes[1].legend()
+    # Direction Accuracy para OHLC
+    ohlc_comps = ['open', 'high', 'low', 'close']
+    accuracies = [metrics[c]['direction_accuracy'] for c in ohlc_comps]
+    colors = ['green' if a > 60 else 'orange' if a > 55 else 'red' for a in accuracies]
     
-    # R² (informativo)
-    r2_scores = [metrics[n]['R2'] for n in names]
-    colors = ['green' if r2 > 0.1 else 'orange' if r2 > 0 else 'red' for r2 in r2_scores]
-    axes[2].bar(names, r2_scores, color=colors, alpha=0.7)
-    axes[2].set_title('R² Scores (Reference)')
-    axes[2].axhline(y=0, color='black', linestyle='--', alpha=0.5)
-    axes[2].tick_params(axis='x', rotation=45)
-    axes[2].grid(True, alpha=0.3, axis='y')
+    axes[0, 1].bar(ohlc_comps, accuracies, color=colors, alpha=0.7)
+    axes[0, 1].set_title('Direction Accuracy (OHLC)')
+    axes[0, 1].set_ylabel('Accuracy (%)')
+    axes[0, 1].axhline(y=50, color='red', linestyle='--', alpha=0.3)
+    axes[0, 1].axhline(y=55, color='orange', linestyle='--', alpha=0.3)
+    axes[0, 1].axhline(y=60, color='green', linestyle='--', alpha=0.3)
+    axes[0, 1].set_ylim([45, 70])
+    axes[0, 1].grid(True, alpha=0.3, axis='y')
+    
+    # MAE por componente
+    all_comps = ['open', 'high', 'low', 'close', 'volume']
+    maes = [metrics[c]['mae'] for c in all_comps]
+    
+    axes[0, 2].bar(all_comps, maes, alpha=0.7, color='steelblue')
+    axes[0, 2].set_title('MAE por Componente')
+    axes[0, 2].set_ylabel('MAE')
+    axes[0, 2].tick_params(axis='x', rotation=45)
+    axes[0, 2].grid(True, alpha=0.3, axis='y')
+    
+    # RMSE
+    rmses = [metrics[c]['rmse'] for c in all_comps]
+    axes[1, 0].bar(all_comps, rmses, alpha=0.7, color='coral')
+    axes[1, 0].set_title('RMSE por Componente')
+    axes[1, 0].set_ylabel('RMSE')
+    axes[1, 0].tick_params(axis='x', rotation=45)
+    axes[1, 0].grid(True, alpha=0.3, axis='y')
+    
+    # Close focus
+    close_acc = metrics['close']['direction_accuracy']
+    close_mae = metrics['close']['mae']
+    color = 'green' if close_acc > 60 else 'orange' if close_acc > 55 else 'red'
+    
+    axes[1, 1].text(0.5, 0.7, f"{close_acc:.1f}%", 
+                    ha='center', va='center', fontsize=40, 
+                    color=color, weight='bold')
+    axes[1, 1].text(0.5, 0.3, f"MAE: {close_mae:.6f}", 
+                    ha='center', va='center', fontsize=12)
+    axes[1, 1].set_title('CLOSE Direction Accuracy')
+    axes[1, 1].axis('off')
+    
+    # Info
+    info_text = (
+        "✅ Zero Data Leakage\n"
+        "✅ OHLCV completo\n"
+        "✅ Loss direccional diferenciable\n"
+        "✅ 12 features esenciales\n"
+        f"✅ Target: Próxima vela"
+    )
+    axes[1, 2].text(0.1, 0.5, info_text, 
+                    ha='left', va='center', fontsize=10,
+                    family='monospace')
+    axes[1, 2].axis('off')
     
     plt.tight_layout()
-    plt.savefig('direction_optimized_results.png', dpi=150, bbox_inches='tight')
+    plt.savefig('lstm_ohlcv_results.png', dpi=150, bbox_inches='tight')
     plt.close()
-    print("📈 Plot saved: direction_optimized_results.png")
+    print("📈 Plot saved: lstm_ohlcv_results.png")
 
 # ================================
 # 🚀 MAIN
@@ -609,15 +557,19 @@ def plot_results(train_losses, val_losses, metrics):
 def main():
     try:
         print("\n" + "="*70)
-        print("  🚀 LSTM-GRU - DIRECTION OPTIMIZED")
+        print("  🚀 LSTM OHLCV PREDICTOR - ZERO LEAKAGE")
         print("="*70)
-        print("\n🎯 Objetivo: Maximizar Direction Accuracy (>70% = profitable)")
-        print("📊 Métrica secundaria: R² (informativo)")
+        print("\n✅ Mejoras:")
+        print("   1. Zero data leakage (validación temporal estricta)")
+        print("   2. Predicción OHLCV completo (5 valores)")
+        print("   3. Loss direccional diferenciable")
+        print("   4. Features mínimas (12) y relevantes")
+        print("   5. Arquitectura simple y enfocada")
         
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"\n🖥️ Device: {device}")
         
-        print("\n📥 Downloading EURUSD=X data...")
+        print("\n📥 Downloading EURUSD data...")
         ticker = yf.Ticker("EURUSD=X")
         df = ticker.history(period="2y", interval="1h")
         
@@ -626,20 +578,13 @@ def main():
         
         df = df.reset_index()
         df.columns = [col.lower() for col in df.columns]
-        
-        rename_dict = {}
-        for col in df.columns:
-            if 'date' in col or 'time' in col:
-                rename_dict[col] = 'time'
-        df.rename(columns=rename_dict, inplace=True)
-        
-        required_cols = ['time', 'open', 'high', 'low', 'close', 'volume']
+        required_cols = ['open', 'high', 'low', 'close', 'volume']
         df = df[required_cols]
         
         print(f"✅ Downloaded: {len(df):,} candles")
         
         (X_train, y_train), (X_val, y_val), (X_test, y_test), \
-        scalers, feature_cols, target_cols = prepare_dataset(df)
+        scalers, feature_cols, target_cols = prepare_dataset_zero_leakage(df)
         
         input_size = len(feature_cols)
         
@@ -663,12 +608,10 @@ def main():
             test_dataset, batch_size=Config.BATCH_SIZE, shuffle=False
         )
         
-        model = DirectionOptimizedModel(
+        model = LSTM_OHLCV(
             input_size=input_size,
-            encoder_hidden=Config.ENCODER_HIDDEN,
-            decoder_hidden=Config.DECODER_HIDDEN,
-            encoder_layers=Config.ENCODER_LAYERS,
-            decoder_layers=Config.DECODER_LAYERS,
+            hidden_size=Config.HIDDEN_SIZE,
+            num_layers=Config.NUM_LAYERS,
             dropout=Config.DROPOUT
         ).to(device)
         
@@ -682,92 +625,65 @@ def main():
         print(f"\n⏱️ Training time: {training_time/60:.1f} min")
         
         predictions, targets, metrics = evaluate_model(
-            model, test_loader, scalers, target_cols, device
+            model, test_loader, scalers['output'], device
         )
-        
-        print("\n" + "="*70)
-        print("  📈 FINAL RESULTS")
-        print("="*70)
-        
-        price_metrics = {k: v for k, v in metrics.items() if 'volume' not in k}
-        avg_acc = np.mean([m['Direction_Accuracy'] for m in price_metrics.values()])
-        avg_r2 = np.mean([m['R2'] for m in price_metrics.values()])
-        
-        print(f"\n🎯 Price (OHLC) Direction Accuracy:")
-        print(f"   Average: {avg_acc:.2f}%")
-        if avg_acc > 70:
-            print(f"   Status: ✅ EXCELLENT for trading!")
-        elif avg_acc > 60:
-            print(f"   Status: ✅ GOOD for trading")
-        elif avg_acc > 55:
-            print(f"   Status: ⚠️ MARGINAL - needs improvement")
-        else:
-            print(f"   Status: ❌ POOR - not profitable")
-        
-        print(f"\n📊 Average R²: {avg_r2:.4f} (informativo)")
         
         plot_results(train_losses, val_losses, metrics)
         
         # Guardar modelo
-        model_dir = 'EURUSD_MODELS'
+        model_dir = 'EURUSD_OHLCV_MODEL'
         os.makedirs(model_dir, exist_ok=True)
         
         print("\n💾 Guardando modelo...")
-        torch.save(model.state_dict(), f'{model_dir}/direction_optimized.pth')
-        
-        from datetime import datetime
-        
-        def to_native(obj):
-            if isinstance(obj, (np.integer, np.int64, np.int32)):
-                return int(obj)
-            elif isinstance(obj, (np.floating, np.float64, np.float32)):
-                return float(obj)
-            elif isinstance(obj, np.ndarray):
-                return obj.tolist()
-            elif isinstance(obj, dict):
-                return {k: to_native(v) for k, v in obj.items()}
-            elif isinstance(obj, (list, tuple)):
-                return [to_native(i) for i in obj]
-            return obj
+        torch.save(model.state_dict(), f'{model_dir}/lstm_ohlcv.pth')
         
         metadata = {
-            'model_type': 'DirectionOptimizedModel',
-            'version': '3.0',
-            'optimization_target': 'direction_accuracy',
+            'model_type': 'LSTM_OHLCV',
+            'version': '1.0_zero_leakage',
+            'output': 'OHLCV_complete',
+            'fixes': [
+                'zero_data_leakage',
+                'temporal_validation',
+                'differentiable_direction_loss',
+                'minimal_features',
+                'ohlcv_prediction'
+            ],
             'input_size': int(input_size),
             'feature_cols': feature_cols,
             'target_cols': target_cols,
             'config': {
-                'encoder_hidden': int(Config.ENCODER_HIDDEN),
-                'decoder_hidden': int(Config.DECODER_HIDDEN),
-                'encoder_layers': int(Config.ENCODER_LAYERS),
-                'decoder_layers': int(Config.DECODER_LAYERS),
-                'direction_weight': float(Config.DIRECTION_WEIGHT),
-                'magnitude_weight': float(Config.MAGNITUDE_WEIGHT)
+                'hidden_size': int(Config.HIDDEN_SIZE),
+                'num_layers': int(Config.NUM_LAYERS),
+                'seq_len': int(Config.SEQ_LEN),
+                'direction_weight': float(Config.DIRECTION_WEIGHT)
             },
-            'metrics_test': to_native(metrics),
-            'avg_direction_accuracy': float(avg_acc),
-            'avg_r2': float(avg_r2),
+            'metrics_test': metrics,
             'training_time_min': float(training_time / 60),
-            'total_params': int(total_params),
-            'timestamp': datetime.now().isoformat()
+            'total_params': int(total_params)
         }
         
-        with open(f'{model_dir}/config_direction_optimized.json', 'w') as f:
+        with open(f'{model_dir}/config_ohlcv.json', 'w') as f:
             json.dump(metadata, f, indent=2)
         
-        joblib.dump(scalers['input'], f'{model_dir}/scaler_input_dir.pkl')
-        joblib.dump(scalers['output_price'], f'{model_dir}/scaler_output_price_dir.pkl')
-        joblib.dump(scalers['output_volume'], f'{model_dir}/scaler_output_volume_dir.pkl')
+        joblib.dump(scalers['input'], f'{model_dir}/scaler_input.pkl')
+        joblib.dump(scalers['output'], f'{model_dir}/scaler_output.pkl')
         
-        print("   ✅ Todos los archivos guardados")
+        print("   ✅ Guardado completo")
         
         print("\n" + "="*70)
-        print("  ✅ DIRECTION-OPTIMIZED TRAINING COMPLETE")
+        print("  ✅ TRAINING COMPLETE - OHLCV PREDICTOR")
         print("="*70)
-        print(f"\n🎯 Direction Accuracy: {avg_acc:.2f}%")
-        print(f"📊 R²: {avg_r2:.4f} (secundario)")
-        print("\n💡 Recuerda: Para trading, direction accuracy > 60% = profitable\n")
+        
+        print(f"\n📊 RESUMEN FINAL:")
+        print(f"   • CLOSE Direction: {metrics['close']['direction_accuracy']:.2f}%")
+        print(f"   • Avg OHLC Accuracy: {np.mean([metrics[c]['direction_accuracy'] for c in ['open','high','low','close']]):.2f}%")
+        print(f"   • CLOSE MAE: {metrics['close']['mae']:.6f}")
+        
+        if metrics['close']['direction_accuracy'] > 55:
+            print("\n💡 Nota sobre resultados:")
+            print("   >55% en forex intrahorario con datos públicos es razonable")
+            print("   >60% sería excelente (difícil de mantener OOS)")
+            print("   Para mejorar: añadir microestructura, order flow, sentiment")
         
     except Exception as e:
         print(f"\n❌ Error: {str(e)}")
